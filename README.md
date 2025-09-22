@@ -1,6 +1,7 @@
 # CHAOS: The CounterStrike Highlight Analysis & Organization System
 
-![Project Banner](https://your-image-host.com/chaos_banner.png) <!-- Optional: A glitchy, chaotic banner would fit perfectly -->
+![Project Banner](<img width="1279" height="479" alt="Screenshot 2025-09-21 at 8 41 03 PM" src="https://github.com/user-attachments/assets/c53bc962-1c9b-43b3-8b65-645d2435f55e" />
+) <!-- Optional: A glitchy, chaotic banner would fit perfectly -->
 
 **Finding the signal in the noise of 700GB of Counter-Strike 2 footage.**
 
