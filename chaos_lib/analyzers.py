@@ -48,30 +48,30 @@ def analyze_killfeed(video_path: str, config: dict, reader) -> list:
     frame_step = config['ocr_frame_step']
     x1, y1, x2, y2 = config['killfeed_roi']
     
-    total_frames = int(cap.get(cv.CAP_PROP_FRAME_COUNT))
-    fps = cap.get(cv.CAP_PROP_FPS)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = cap.get(cv2.CAP_PROP_FPS)
 
     for frame_idx in range(0, total_frames, frame_step):
-        cap.set(cv.CAP_PROP_POS_FRAMES, frame_idx)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
         ret, frame = cap.read()
         if not ret: break
 
         killfeed_crop = frame[y1:y2, x1:x2]
-        hsv = cv2.cvtColor(killfeed_crop, cv.COLOR_BGR2HSV)
-        mask1 = cv.inRange(hsv, hsv_lower1, hsv_upper1)
-        mask2 = cv.inRange(hsv, hsv_lower2, hsv_upper2)
-        red_mask = cv.bitwise_or(mask1, mask2)
+        hsv = cv2.cvtColor(killfeed_crop, cv2.COLOR_BGR2HSV)
+        mask1 = cv2.inRange(hsv, hsv_lower1, hsv_upper1)
+        mask2 = cv2.inRange(hsv, hsv_lower2, hsv_upper2)
+        red_mask = cv2.bitwise_or(mask1, mask2)
         
-        contours, _ = cv.findContours(red_mask, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+        contours, _ = cv2.findContours(red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         for cnt in contours:
-            if cv.contourArea(cnt) < min_area:
+            if cv2.contourArea(cnt) < min_area:
                 continue
 
             detected_player = "Unknown"
             full_text = ""
 
-            x, y, w, h = cv.boundingRect(cnt)
+            x, y, w, h = cv2.boundingRect(cnt)
             kill_line_image = killfeed_crop[y:y+h, x:x+w]
             ocr_result = reader.readtext(kill_line_image, detail=0, paragraph=True)
             
