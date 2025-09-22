@@ -7,11 +7,17 @@ tqdm
 opencv-python
 easyocr
 
-# PyTorch (required by EasyOCR and Whisper)
-# CRITICAL: Install the correct version for your CUDA setup from https://pytorch.org/
-# The command below is an EXAMPLE for CUDA 11.8. Update it for your system.
-torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+# --- PyTorch Dependencies ---
+# CRITICAL: The URL must match your system's CUDA version.
+# This URL is an EXAMPLE for CUDA 11.8. Find the correct one for your system
+# at the PyTorch website: https://pytorch.org/
+--extra-index-url https://download.pytorch.org/whl/cu118
+
+torch
+torchvision
+torchaudio
 
 # Audio Analysis
+# Note: The @ git+... syntax is correct for installing directly from GitHub.
 openai-whisper @ git+https://github.com/openai/whisper.git
 librosa
