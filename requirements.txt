@@ -11,7 +11,7 @@ easyocr
 # CRITICAL: The URL must match your system's CUDA version.
 # This URL is an EXAMPLE for CUDA 11.8. Find the correct one for your system
 # at the PyTorch website: https://pytorch.org/
---extra-index-url https://download.pytorch.org/whl/cu118
+--extra-index-url https://download.pytorch.org/whl/cu121
 
 torch
 torchvision
