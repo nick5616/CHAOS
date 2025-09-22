@@ -178,10 +178,27 @@ def analyze_audio(video_path: str, model, temp_dir: str) -> tuple[list, list]:
             os.remove(audio_path)
 
 def run_analysis(config: dict):
+    """Main function to run all analysis on videos from the manifest."""
     data_folder = config['data_folder']
     manifest_path = os.path.join(data_folder, 'manifest.json')
+    
     with open(manifest_path, 'r') as f:
         video_paths = json.load(f)
+
+    # --- NEW DEBUG LOGIC ---
+    # Check if debug_mode is enabled in the config.
+    if config.get('debug_mode', False):
+        if not video_paths:
+            print("Debug mode enabled, but manifest is empty. Nothing to process.")
+            return
+        # If so, slice the list to only include the first video.
+        video_paths = video_paths[:1]
+        print(f"DEBUG: Processing a single video: {video_paths[0]}")
+    # --- END OF DEBUG LOGIC ---
+
+    if not video_paths:
+        print("No video paths to analyze.")
+        return
 
     print("Initializing AI Models (EasyOCR & Whisper)...")
     import easyocr
@@ -189,6 +206,7 @@ def run_analysis(config: dict):
     whisper_model = whisper.load_model(config['whisper_model'])
     
     all_events = []
+    
     progress = tqdm(video_paths, desc="Analyzing Videos")
     for video_path in progress:
         base_name = os.path.basename(video_path)
