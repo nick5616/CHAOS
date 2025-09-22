@@ -1,0 +1,46 @@
+import os
+import json
+import subprocess
+from tqdm import tqdm
+
+def run_clipping(config: dict):
+    """Reads the highlights file and uses FFmpeg to cut the final clips at maximum speed."""
+    data_folder = config['data_folder']
+    output_folder = config['final_clips_folder']
+    highlights_path = os.path.join(data_folder, 'ordered_highlights.json')
+
+    if not os.path.exists(highlights_path):
+        print(f"Highlights file not found at {highlights_path}. Please run the 'correlate' stage first.")
+        return
+
+    with open(highlights_path, 'r') as f:
+        highlights = json.load(f)
+
+    print(f"Starting to clip {len(highlights)} videos using high-speed stream copy...")
+    progress = tqdm(highlights, desc="Clipping Videos")
+    for i, clip_data in enumerate(progress):
+        source_video = clip_data['source_video']
+        start_time = max(0, clip_data['clip_start'])
+        duration = clip_data['clip_end'] - start_time
+        
+        if duration <= 0:
+            continue
+
+        score = int(clip_data['score'])
+        base_name = os.path.splitext(os.path.basename(source_video))[0]
+        output_filename = f"clip_{i+1:04d}_{base_name[:20]}_score_{score}.mp4"
+        output_path = os.path.join(output_folder, output_filename)
+
+        # Use the '-c copy' command for a lossless, fast cut without re-encoding.
+        command = [
+            'ffmpeg', '-y', 
+            '-ss', str(start_time), 
+            '-i', source_video,
+            '-t', str(duration), 
+            '-c', 'copy', 
+            output_path
+        ]
+        
+        subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    print("\nClipping complete.")

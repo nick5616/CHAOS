@@ -17,52 +17,68 @@ This project is the answer to that feeling.
 
 This repository documents my attempt to fight creative burnout with code, turning a terabyte of digital chaos into a curated library of meaningful highlights.
 
-## ✨ The Method to the Madness
-
-CHAOS is a multi-layered system that analyzes gameplay footage from different angles to build a complete picture of what happened in a clip, both on-screen and off.
-
--   **Deconstructing the Killfeed:** Uses OpenCV and EasyOCR to perform Optical Character Recognition on the killfeed, logging every kill and identifying killstreaks with cold, machine-like efficiency.
--   **Reading the Room (and the Rage):** The same OCR engine is pointed at the chat box. It then runs sentiment analysis on the text to find the moments of hype, praise from teammates, and—most importantly—salt from the enemy.
--   **Translating the Comms:** All audio is stripped from the videos and fed into OpenAI's Whisper, which generates a complete, time-stamped transcript of every voice communication. No funny comment or panicked callout is missed.
--   **Detecting the Pandemonium:** Beyond words, the system analyzes the audio waveform itself using `librosa`. It finds the moments of pure chaos—the shouting, the laughter, the keyboard smashes—by detecting sudden spikes in volume and pitch.
--   **The Order Engine:** This is the heart of CHAOS. A central script takes all these disparate data streams—kills, chat messages, transcripts, and audio spikes—and fuses them. It finds the correlations, boosting the score of a clip where a slick double-kill is followed by enemy rage in the chat and your teammates screaming in voice comms.
--   **Exporting the Order:** The final output is a clean, structured JSON file—a perfect map of the chaos, pointing to the exact start and end times of every highlight worth watching. This file becomes the blueprint for an FFmpeg script to automatically cut the final clips.
-
-## 🛠️ Tech Stack
-
--   **Language:** Python
--   **Core Libraries:**
-    -   **OpenCV:** For video frame processing.
-    -   **EasyOCR:** For robust, GPU-accelerated text recognition.
-    -   **Whisper (OpenAI):** For state-of-the-art audio transcription.
-    -   **Librosa:** For audio feature extraction (detecting screams and laughter).
-    -   **Pandas:** For managing and correlating the large datasets of events.
--   **Tooling:**
-    -   **FFmpeg:** The command-line workhorse for all video/audio manipulation.
-    -   **Git & GitHub:** For versioning the descent into madness.
-
-## 📈 The Workflow: From Chaos to Clarity
-
-1.  **Phase 1: Triage:** The system makes a quick first pass on all 700GB, using the most efficient analysis (killfeed OCR) to identify any video that contains a hint of action. This creates a "shortlist" of clips that deserve a closer look.
-2.  **Phase 2: Deep Analysis:** The shortlisted videos are subjected to the full, computationally-expensive suite of tools: audio transcription, chat analysis, and waveform scanning.
-3.  **Phase 3: Synthesis:** The Order Engine runs, correlating all events and assigning a `composite_score` to each potential highlight. The true gems—the moments of pure, unadulterated Counter-Strike—bubble to the top.
-4.  **Phase 4: Execution:** The final, sorted JSON is used as a command list for FFmpeg, which executes the batch job of cutting every single highlight into its own file, ready for the final edit.
-
 ## 🔧 Setup & Installation
 
-**Prerequisites:**
-*   Python 3.9+
-*   FFmpeg installed and available in your system's PATH.
-*   An NVIDIA GPU with CUDA is strongly recommended. This isn't a job for a CPU.
+This project relies on a set of specific Python packages. To avoid conflicts with other Python projects on your system, we **strongly recommend** using a virtual environment. This creates an isolated "sandbox" for all of CHAOS's dependencies.
 
-**Installation:**
+### 🚀 Automated Setup on Windows (Recommended)
+
+For a simple, one-click setup on Windows, just run the `setup.bat` script included in the repository.
+
+1.  **Double-click `setup.bat`**.
+2.  A command window will open and guide you through the process:
+    *   It will verify you have Python installed.
+    *   It will create the virtual environment folder (`venv`).
+    *   It will automatically install all the required packages from `requirements.txt`.
+3.  Once it's finished, you're ready to go!
+
+### 💻 Manual Setup Instructions
+
+If you prefer to set up the project manually or are not on Windows, follow these steps in your terminal.
+
+**1. Clone the Repository:**
+   ```bash
+   git clone https://github.com/your-username/CHAOS.git
+   cd CHAOS
+   ```
+
+**2. Create the Virtual Environment:**
 
 ```bash
-# Clone the madness
-git clone https://github.com/your-username/CHAOS.git
-cd CHAOS
+python -m venv venv
+```
+3. Activate the Virtual Environment:
 
-# Create a virtual environment and install dependencies
+On Windows (Command Prompt or PowerShell):
+```bash
+.\venv\Scripts\activate
+```
+On macOS/Linux:
+```bash
+source venv/bin/activate
+```
+You'll know it worked when you see (venv) at the beginning of your terminal prompt.
+
+4. Install Dependencies:
+
+```bash
 pip install -r requirements.txt
+```
+### 🏃‍♀️ Usage
+Before running the main script, always make sure your virtual environment is active! (You should see (venv) in your terminal prompt).
 
-# (Additional setup for PyTorch with CUDA may be required depending on your system)
+Fill out your specific paths and settings in the config.yaml file first. Then, run the stages of the pipeline:
+
+#### Run the entire pipeline from start to finish
+```bash
+python main.py all
+```
+#### Or run stages individually
+```bash python main.py ingest
+python main.py analyze
+python main.py correlate
+python main.py summary
+python main.py clip
+```
+
+(Additional setup for PyTorch with CUDA may be required depending on your system)

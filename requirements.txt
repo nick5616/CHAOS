@@ -1,0 +1,17 @@
+# Core Libraries
+pyyaml
+pandas
+tqdm
+
+# Computer Vision
+opencv-python
+easyocr
+
+# PyTorch (required by EasyOCR and Whisper)
+# CRITICAL: Install the correct version for your CUDA setup from https://pytorch.org/
+# The command below is an EXAMPLE for CUDA 11.8. Update it for your system.
+torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+
+# Audio Analysis
+openai-whisper @ git+https://github.com/openai/whisper.git
+librosa
