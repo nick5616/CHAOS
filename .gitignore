@@ -25,3 +25,5 @@ final_clips/
 .DS_Store
 # Windows
 Thumbs.db
+
+/data/debug_screenshots/
