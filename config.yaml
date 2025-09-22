@@ -1,11 +1,8 @@
 
----
-### **FILE: `config.yaml`**
-```yaml
 # === FILE PATHS ===
 # The root folder containing all your raw CS2 video captures.
 # Use forward slashes (/) even on Windows.
-captures_folder: "C:/Users/YourUser/Videos/CounterStrike"
+captures_folder: "D:\\Captures\\Counter-strike 2"
 
 # Folder to store intermediate data files (JSONs). Will be created if it doesn't exist.
 data_folder: "./data"
@@ -17,8 +14,12 @@ final_clips_folder: "./final_clips"
 # === ANALYSIS PARAMETERS ===
 # A list of your known in-game names. The system will use these for high-confidence kill attribution.
 player_names:
-  - "YourPrimaryAccount"
-  - "YourSmurfAccount"
+  - "stingered by an WAS"
+  - "marmalade sandwich"
+  - "IZI KATKA"
+  - "hot dog dog"
+  - "excellent mage"
+  - "pistol mage"
 
 # Region of Interest (ROI) for the CS2 Killfeed (top-right of screen).
 # You MUST find these coordinates yourself from a screenshot of your game.
