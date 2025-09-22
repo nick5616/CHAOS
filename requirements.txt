@@ -21,3 +21,5 @@ torchaudio
 # Note: The @ git+... syntax is correct for installing directly from GitHub.
 openai-whisper @ git+https://github.com/openai/whisper.git
 librosa
+
+thefuzz

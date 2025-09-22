@@ -37,13 +37,18 @@ red_hsv_upper1: [10, 255, 255]
 red_hsv_lower2: [170, 120, 70]
 red_hsv_upper2: [180, 255, 255]
 
-# The minimum number of red pixels to count as a valid kill border. Prevents noise.
-min_red_contour_area: 200
+# SHAPE DETECTION: Filters out red noise that isn't a rectangle.
+# Tweak these values based on your debug screenshots and resolution.
+killfeed_rect_min_height: 25      # Min pixel height of the killfeed entry
+killfeed_rect_max_height: 40      # Max pixel height of the killfeed entry
+killfeed_rect_min_aspect_ratio: 8.0 # Min width-to-height ratio (long and thin)
 
-# How many frames to skip during analysis. Higher is faster but less accurate.
+# DEDUPLICATION: Prevents the same kill from being logged multiple times.
+kill_deduplication_seconds: 3.0   # Cooldown period after a kill is detected
+kill_deduplication_similarity_threshold: 85 # 0-100, how similar OCR text must be to be a duplicate
+
+# --- General Analysis ---
 ocr_frame_step: 30
-
-# Whisper model to use. Options: tiny, base, small, medium, large.
 whisper_model: "base"
 
 
@@ -51,7 +56,6 @@ whisper_model: "base"
 # The time window around a "trigger" event (like a kill) to look for other events.
 clip_pre_buffer_seconds: 7
 clip_post_buffer_seconds: 8
-
 # Weights for scoring a potential clip. Tweak these to prioritize what you find important.
 scoring_weights:
   kill: 10
