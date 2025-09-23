@@ -1,3 +1,4 @@
+# === FILE: chaos_lib/analyzers.py ===
 import os
 import json
 import cv2
@@ -7,8 +8,9 @@ import numpy as np
 import subprocess
 import shutil
 from tqdm import tqdm
-from thefuzz import fuzz # Import the text similarity library
+from thefuzz import fuzz
 
+# (Helper functions _save_debug_screenshot and _extract_audio remain the same)
 def _save_debug_screenshot(config: dict, image, video_path: str, event_type: str, timestamp: float):
     if not config.get('debug_mode', False): return
     debug_folder = os.path.join(config['data_folder'], 'debug_screenshots')
@@ -19,32 +21,70 @@ def _save_debug_screenshot(config: dict, image, video_path: str, event_type: str
     filepath = os.path.join(debug_folder, filename)
     cv2.imwrite(filepath, image)
 
-def _parse_killer_from_text(text: str) -> str | None:
-    separators = [' + ', ' ► ']
-    for sep in separators:
-        if sep in text:
-            parts = text.split(sep)
-            potential_name = parts[0].strip()
-            if potential_name: return potential_name
+def _extract_audio(video_path: str, temp_dir: str) -> str:
+    os.makedirs(temp_dir, exist_ok=True)
+    audio_filename = os.path.splitext(os.path.basename(video_path))[0] + ".wav"
+    output_path = os.path.join(temp_dir, audio_filename)
+    command = ['ffmpeg', '-y', '-i', video_path, '-vn', '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1', output_path]
+    subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return output_path
+
+# --- FINAL, ROBUST PARSING & IDENTIFICATION LOGIC ---
+def _parse_and_identify_kill(text: str, known_players: list) -> dict | None:
+    """
+    Parses a killfeed line to extract killer and victim, handling abbreviations.
+    Returns a dictionary with parsed info or None.
+    """
     parts = text.split()
-    if len(parts) >= 2: return parts[0]
-    return None
+    if len(parts) < 2:
+        return None # Not a valid kill line
+
+    # The victim is reliably the last part of the string.
+    victim = parts[-1]
+    
+    # The killer is everything before the victim, minus icons/modifiers.
+    # We can't OCR icons, so we use a robust matching approach.
+    detected_player = "Unknown"
+    highest_match_score = 0
+
+    for name in known_players:
+        # `partial_ratio` is perfect for matching "excellent mage of 6 sense"
+        # against "excellent mage of 6 se..."
+        # We set a high threshold to ensure it's a confident match.
+        match_score = fuzz.partial_ratio(name, text)
+        if match_score > 90 and match_score > highest_match_score:
+            detected_player = name # Store the full, non-abbreviated name
+            highest_match_score = match_score
+
+    # If no known player was found via fuzzy match, fallback to a simple parse.
+    if detected_player == "Unknown":
+        # Heuristic: Find the text before common weapon separators
+        separators = [' + ', ' ► ']
+        for sep in separators:
+            if sep in text:
+                detected_player = text.split(sep)[0].strip()
+                break
+        else: # If no separator, assume first word is killer
+            detected_player = parts[0]
+
+    return {
+        "killer": detected_player,
+        "victim": victim,
+        "raw_text": text
+    }
 
 def analyze_killfeed(video_path: str, config: dict, reader) -> list:
     player_names = config['player_names']
     kill_events = []
 
-    # --- Load Shape Detection & Debouncing parameters ---
     hsv_lower1, hsv_upper1 = np.array(config['red_hsv_lower1']), np.array(config['red_hsv_upper1'])
     hsv_lower2, hsv_upper2 = np.array(config['red_hsv_lower2']), np.array(config['red_hsv_upper2'])
     min_h, max_h = config['killfeed_rect_min_height'], config['killfeed_rect_max_height']
     min_aspect_ratio = config['killfeed_rect_min_aspect_ratio']
     dedup_secs = config['kill_deduplication_seconds']
-    dedup_sim_thresh = config['kill_deduplication_similarity_threshold']
     
-    # --- Debouncer state variables ---
-    last_kill_timestamp = -1000.0
-    last_kill_text = ""
+    # Debouncer tracks a list of recent victims: [(timestamp, victim_name), ...]
+    recent_victims = []
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened(): return []
@@ -66,92 +106,89 @@ def analyze_killfeed(video_path: str, config: dict, reader) -> list:
         red_mask = cv2.bitwise_or(mask1, mask2)
         
         contours, _ = cv2.findContours(red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        timestamp = frame_idx / fps
+
+        # --- Debouncer Cleanup: Remove old victims from our tracking list ---
+        recent_victims = [(ts, vic) for ts, vic in recent_victims if timestamp - ts < dedup_secs]
+        
+        current_frame_victims = set()
 
         for cnt in contours:
             x, y, w, h = cv2.boundingRect(cnt)
+            aspect_ratio = w / h if h > 0 else 0
             
-            # --- STAGE 1: SHAPE DETECTION ---
-            # Rule 1: Check if height is within our expected range
-            if not (min_h <= h <= max_h):
+            if not (min_h <= h <= max_h and aspect_ratio >= min_aspect_ratio):
                 continue
             
-            # Rule 2: Check if aspect ratio is long and thin
-            aspect_ratio = w / h
-            if aspect_ratio < min_aspect_ratio:
-                continue
-
-            # If we pass shape checks, this is a high-confidence rectangle.
             kill_line_image = killfeed_crop[y:y+h, x:x+w]
             ocr_result = reader.readtext(kill_line_image, detail=0, paragraph=True)
             
-            if not ocr_result:
-                continue
-
-            full_text = " ".join(ocr_result)
-            timestamp = frame_idx / fps
-
-            # --- STAGE 2: EVENT DEBOUNCING ---
-            time_since_last_kill = timestamp - last_kill_timestamp
-            text_similarity_score = fuzz.ratio(full_text, last_kill_text)
-
-            if time_since_last_kill < dedup_secs and text_similarity_score > dedup_sim_thresh:
-                # This is likely a duplicate of the last kill we found. Skip it.
-                continue
-
-            # This is a new, unique kill event. Process it.
-            detected_player = "Unknown"
-            found_known_player = False
-            for name in player_names:
-                if name in full_text:
-                    detected_player = name
-                    found_known_player = True
-                    break
-            if not found_known_player:
-                parsed_name = _parse_killer_from_text(full_text)
-                if parsed_name: detected_player = parsed_name
+            if not ocr_result: continue
             
-            # Save debug screenshot for this valid, unique kill
+            full_text = " ".join(ocr_result)
+            parsed_info = _parse_and_identify_kill(full_text, player_names)
+            
+            if not parsed_info: continue
+
+            victim_name = parsed_info['victim']
+            
+            # Prevent logging the same victim twice in the same frame
+            if victim_name in current_frame_victims:
+                continue
+
+            # Check if this victim has been seen in recent frames
+            is_duplicate = False
+            for _, recent_vic in recent_victims:
+                if fuzz.ratio(victim_name, recent_vic) > 85:
+                    is_duplicate = True
+                    break
+            
+            if is_duplicate:
+                continue
+
+            # This is a new, unique kill.
             _save_debug_screenshot(config, kill_line_image, video_path, "kill", timestamp)
-
-            kill_event = {"source_video": video_path, "timestamp_seconds": timestamp, "type": "kill", "details": {"raw_text": full_text, "detected_player": detected_player}}
+            kill_event = {
+                "source_video": video_path,
+                "timestamp_seconds": timestamp,
+                "type": "kill",
+                "details": {
+                    "raw_text": parsed_info['raw_text'],
+                    "detected_player": parsed_info['killer'],
+                    "victim": parsed_info['victim']
+                }
+            }
             kill_events.append(kill_event)
-
-            # Update debouncer state with this new kill
-            last_kill_timestamp = timestamp
-            last_kill_text = full_text
+            
+            # Add to both current frame and long-term lists to prevent all duplicates
+            current_frame_victims.add(victim_name)
+            recent_victims.append((timestamp, victim_name))
     
     cap.release()
     return kill_events
 
-# def analyze_chat(video_path: str, config: dict, reader) -> list:
-#     x1, y1, x2, y2 = config['chat_roi']
-#     cap = cv2.VideoCapture(video_path)
-#     if not cap.isOpened(): return []
-#     events = []
-#     frame_step = config['ocr_frame_step']
-#     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-#     fps = cap.get(cv2.CAP_PROP_FPS)
-#     for frame_idx in range(0, total_frames, frame_step):
-#         cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-#         ret, frame = cap.read()
-#         if not ret: break
-#         cropped_frame = frame[y1:y2, x1:x2]
-#         results = reader.readtext(cropped_frame, detail=0, paragraph=True)
-#         if results:
-#             timestamp = frame_idx / fps
-#             full_text = " ".join(results)
-#             _save_debug_screenshot(config, cropped_frame, video_path, "chat", timestamp)
-#             events.append({"source_video": video_path, "timestamp_seconds": timestamp, "type": "chat", "details": {"text": full_text, "sentiment": "neutral"}})
-#     cap.release()
-#     return events
-
-def _extract_audio(video_path: str, temp_dir: str) -> str:
-    os.makedirs(temp_dir, exist_ok=True)
-    audio_filename = os.path.splitext(os.path.basename(video_path))[0] + ".wav"
-    output_path = os.path.join(temp_dir, audio_filename)
-    command = ['ffmpeg', '-y', '-i', video_path, '-vn', '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1', output_path]
-    subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return output_path
+# (analyze_chat, analyze_audio, and run_analysis remain the same)
+def analyze_chat(video_path: str, config: dict, reader) -> list:
+    x1, y1, x2, y2 = config['chat_roi']
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened(): return []
+    events = []
+    frame_step = config['ocr_frame_step']
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    for frame_idx in range(0, total_frames, frame_step):
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+        ret, frame = cap.read()
+        if not ret: break
+        cropped_frame = frame[y1:y2, x1:x2]
+        results = reader.readtext(cropped_frame, detail=0, paragraph=True)
+        if results:
+            timestamp = frame_idx / fps
+            full_text = " ".join(results)
+            _save_debug_screenshot(config, cropped_frame, video_path, "chat", timestamp)
+            events.append({"source_video": video_path, "timestamp_seconds": timestamp, "type": "chat", "details": {"text": full_text, "sentiment": "neutral"}})
+    cap.release()
+    return events
 
 def analyze_audio(video_path: str, model, temp_dir: str) -> tuple[list, list]:
     audio_path = None
