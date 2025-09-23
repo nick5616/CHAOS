@@ -28,36 +28,37 @@ killfeed_roi: [1920, 40, 2550, 300]
 # Region of Interest (ROI) for the Chat Box (bottom-left of screen).
 chat_roi: [30, 1150, 650, 1300]
 
-# HSV Color Range for the RED border around your kills.
-# You may need to tweak this. Use an online tool to find the HSV values for your specific red.
-# Red wraps around the 0-180 hue scale in OpenCV, so we need two ranges.
+# --- Kill Detection Tuning ---
 red_hsv_lower1: [0, 120, 70]
 red_hsv_upper1: [10, 255, 255]
 red_hsv_lower2: [170, 120, 70]
 red_hsv_upper2: [180, 255, 255]
 
-# SHAPE DETECTION: Filters out red noise that isn't a rectangle.
-# Tweak these values based on your debug screenshots and resolution.
-killfeed_rect_min_height: 25 # Min pixel height of the killfeed entry
-killfeed_rect_max_height: 45 # Max pixel height of the killfeed entry
-killfeed_rect_min_aspect_ratio: 8.0 # Min width-to-height ratio (long and thin)
+# --- NEW: Color ranges for parsing names (T-side Orange, CT-side Blue) ---
+# Tweak these using the tuner.py script!
+t_orange_hsv_lower: [10, 150, 150]
+t_orange_hsv_upper: [25, 255, 255]
+ct_blue_hsv_lower: [100, 150, 150]
+ct_blue_hsv_upper: [130, 255, 255]
 
-# DEDUPLICATION: Prevents the same kill from being logged multiple times.
-kill_deduplication_seconds: 3.0 # Cooldown period after a kill is detected
-kill_deduplication_similarity_threshold: 85 # 0-100, how similar OCR text must be to be a duplicate
+# SHAPE DETECTION: Filters out red noise.
+killfeed_rect_min_height: 25
+killfeed_rect_max_height: 50
+killfeed_rect_min_aspect_ratio: 8.0
+
+# DEDUPLICATION: How long a kill is remembered after it disappears from the feed.
+kill_memory_duration_seconds: 7.0
 
 # --- General Analysis ---
 ocr_frame_step: 30
 whisper_model: "base"
 
 # === CORRELATION & SCORING PARAMETERS ===
-# The time window around a "trigger" event (like a kill) to look for other events.
 clip_pre_buffer_seconds: 7
 clip_post_buffer_seconds: 8
-# Weights for scoring a potential clip. Tweak these to prioritize what you find important.
 scoring_weights:
     kill: 10
-    multi_kill_bonus: 15 # Additional points if 2+ kills are in the window
-    team_hype_voice: 20 # Points for finding hype words in voice comms
-    enemy_rage_chat: 25 # Points for finding negative sentiment in chat
-    audio_spike: 5 # Points for a loud noise (shout/laughter)
+    multi_kill_bonus: 15
+    team_hype_voice: 20
+    enemy_rage_chat: 25
+    audio_spike: 5
