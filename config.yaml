@@ -1,8 +1,8 @@
-
 # === FILE PATHS ===
 # The root folder containing all your raw CS2 video captures.
 # Use forward slashes (/) even on Windows.
-captures_folder: "D:\\Captures\\Counter-strike 2"
+# captures_folder: "D:\\Captures\\Counter-strike 2" # Windows
+captures_folder: "/Users/nick/Desktop/Captures" # Mac
 
 # Folder to store intermediate data files (JSONs). Will be created if it doesn't exist.
 data_folder: "./data"
@@ -10,24 +10,23 @@ data_folder: "./data"
 # Folder to store the final, cut video clips. Will be created if it doesn't exist.
 final_clips_folder: "./final_clips"
 
-
 # === ANALYSIS PARAMETERS ===
 # A list of your known in-game names. The system will use these for high-confidence kill attribution.
 player_names:
-  - "stingered by an WAS"
-  - "marmalade sandwich"
-  - "IZI KATKA"
-  - "hot dog dog"
-  - "excellent mage"
-  - "pistol mage"
+    - "stingered by an WAS"
+    - "marmalade sandwich"
+    - "IZI KATKA"
+    - "hot dog dog"
+    - "excellent mage"
+    - "pistol mage"
 
 # Region of Interest (ROI) for the CS2 Killfeed (top-right of screen).
 # You MUST find these coordinates yourself from a screenshot of your game.
 # Format: [x1, y1, x2, y2] -> top-left corner (x1, y1) and bottom-right corner (x2, y2)
-killfeed_roi: [2000, 40, 2530, 300] # Example for a 1920x1080 screen
+killfeed_roi: [1920, 40, 2550, 300]
 
 # Region of Interest (ROI) for the Chat Box (bottom-left of screen).
-chat_roi: [30, 1150, 650, 1300] # Example for a 1920x1080 screen
+chat_roi: [30, 1150, 650, 1300]
 
 # HSV Color Range for the RED border around your kills.
 # You may need to tweak this. Use an online tool to find the HSV values for your specific red.
@@ -39,18 +38,17 @@ red_hsv_upper2: [180, 255, 255]
 
 # SHAPE DETECTION: Filters out red noise that isn't a rectangle.
 # Tweak these values based on your debug screenshots and resolution.
-killfeed_rect_min_height: 25      # Min pixel height of the killfeed entry
-killfeed_rect_max_height: 40      # Max pixel height of the killfeed entry
+killfeed_rect_min_height: 25 # Min pixel height of the killfeed entry
+killfeed_rect_max_height: 45 # Max pixel height of the killfeed entry
 killfeed_rect_min_aspect_ratio: 8.0 # Min width-to-height ratio (long and thin)
 
 # DEDUPLICATION: Prevents the same kill from being logged multiple times.
-kill_deduplication_seconds: 3.0   # Cooldown period after a kill is detected
+kill_deduplication_seconds: 3.0 # Cooldown period after a kill is detected
 kill_deduplication_similarity_threshold: 85 # 0-100, how similar OCR text must be to be a duplicate
 
 # --- General Analysis ---
 ocr_frame_step: 30
 whisper_model: "base"
-
 
 # === CORRELATION & SCORING PARAMETERS ===
 # The time window around a "trigger" event (like a kill) to look for other events.
@@ -58,8 +56,8 @@ clip_pre_buffer_seconds: 7
 clip_post_buffer_seconds: 8
 # Weights for scoring a potential clip. Tweak these to prioritize what you find important.
 scoring_weights:
-  kill: 10
-  multi_kill_bonus: 15  # Additional points if 2+ kills are in the window
-  team_hype_voice: 20   # Points for finding hype words in voice comms
-  enemy_rage_chat: 25   # Points for finding negative sentiment in chat
-  audio_spike: 5        # Points for a loud noise (shout/laughter)
+    kill: 10
+    multi_kill_bonus: 15 # Additional points if 2+ kills are in the window
+    team_hype_voice: 20 # Points for finding hype words in voice comms
+    enemy_rage_chat: 25 # Points for finding negative sentiment in chat
+    audio_spike: 5 # Points for a loud noise (shout/laughter)
