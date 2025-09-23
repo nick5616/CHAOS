@@ -123,28 +123,27 @@ def analyze_killfeed(video_path: str, config: dict, reader) -> list:
     cap.release()
     return kill_events
 
-# (The rest of the file remains the same)
-def analyze_chat(video_path: str, config: dict, reader) -> list:
-    x1, y1, x2, y2 = config['chat_roi']
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened(): return []
-    events = []
-    frame_step = config['ocr_frame_step']
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    for frame_idx in range(0, total_frames, frame_step):
-        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-        ret, frame = cap.read()
-        if not ret: break
-        cropped_frame = frame[y1:y2, x1:x2]
-        results = reader.readtext(cropped_frame, detail=0, paragraph=True)
-        if results:
-            timestamp = frame_idx / fps
-            full_text = " ".join(results)
-            _save_debug_screenshot(config, cropped_frame, video_path, "chat", timestamp)
-            events.append({"source_video": video_path, "timestamp_seconds": timestamp, "type": "chat", "details": {"text": full_text, "sentiment": "neutral"}})
-    cap.release()
-    return events
+# def analyze_chat(video_path: str, config: dict, reader) -> list:
+#     x1, y1, x2, y2 = config['chat_roi']
+#     cap = cv2.VideoCapture(video_path)
+#     if not cap.isOpened(): return []
+#     events = []
+#     frame_step = config['ocr_frame_step']
+#     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+#     fps = cap.get(cv2.CAP_PROP_FPS)
+#     for frame_idx in range(0, total_frames, frame_step):
+#         cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+#         ret, frame = cap.read()
+#         if not ret: break
+#         cropped_frame = frame[y1:y2, x1:x2]
+#         results = reader.readtext(cropped_frame, detail=0, paragraph=True)
+#         if results:
+#             timestamp = frame_idx / fps
+#             full_text = " ".join(results)
+#             _save_debug_screenshot(config, cropped_frame, video_path, "chat", timestamp)
+#             events.append({"source_video": video_path, "timestamp_seconds": timestamp, "type": "chat", "details": {"text": full_text, "sentiment": "neutral"}})
+#     cap.release()
+#     return events
 
 def _extract_audio(video_path: str, temp_dir: str) -> str:
     os.makedirs(temp_dir, exist_ok=True)
@@ -207,10 +206,10 @@ def run_analysis(config: dict):
         base_name = os.path.basename(video_path)
         progress.set_description(f"Analyzing {base_name[:30]}...")
         kill_events = analyze_killfeed(video_path, config, ocr_reader)
-        chat_events = analyze_chat(video_path, config, ocr_reader)
+        # chat_events = analyze_chat(video_path, config, ocr_reader)
         voice_events, spike_events = analyze_audio(video_path, whisper_model, os.path.join(data_folder, "temp_audio"))
         all_events.extend(kill_events)
-        all_events.extend(chat_events)
+        # all_events.extend(chat_events)
         all_events.extend(spike_events)
         all_events.extend(voice_events)
     events_path = os.path.join(data_folder, "all_events.json")
