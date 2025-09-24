@@ -173,7 +173,6 @@ def analyze_killfeed(video_path: str, config: dict, reader) -> list:
     cap.release()
     return kill_events
 
-# (analyze_chat and other functions remain the same)
 def analyze_chat(video_path: str, config: dict, reader) -> list:
     x1, y1, x2, y2 = config['chat_roi']
     cap = cv2.VideoCapture(video_path)

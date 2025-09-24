@@ -6,10 +6,10 @@ echo ======================================================
 echo.
 
 pushd "%~dp0"
-echo [0/5] Setting working directory to: %cd%
+echo [0/6] Setting working directory to: %cd%
 echo.
 
-echo [1/5] Checking for Python...
+echo [1/6] Checking for Python...
 python --version >nul 2>nul
 if %errorlevel% neq 0 (
     echo ERROR: Python not found. Please install from python.org and add to PATH.
@@ -18,7 +18,22 @@ if %errorlevel% neq 0 (
 echo      Python found.
 echo.
 
-echo [2/5] Creating virtual environment 'venv'...
+echo [2/6] Checking for FFmpeg...
+ffmpeg -version >nul 2>nul
+if %errorlevel% neq 0 (
+    echo      FFmpeg not found. Please install FFmpeg manually:
+    echo      Download from: https://ffmpeg.org/download.html
+    echo      Or use chocolatey: choco install ffmpeg
+    echo      Or use winget: winget install ffmpeg
+    echo      Make sure to add FFmpeg to your system PATH.
+    echo      After installation, run this setup script again.
+    goto :error
+) else (
+    echo      FFmpeg found.
+)
+echo
+
+echo [3/6] Creating virtual environment 'venv'...
 if exist "venv" (
     echo      Virtual environment exists. Skipping.
 ) else (
@@ -28,7 +43,7 @@ if exist "venv" (
 )
 echo.
 
-echo [3/5] Activating environment and installing base packages...
+echo [4/6] Activating environment and installing base packages...
 call "venv\Scripts\activate.bat"
 pip install -r "requirements.txt"
 if %errorlevel% neq 0 (
@@ -38,7 +53,7 @@ if %errorlevel% neq 0 (
 echo      Base packages installed.
 echo.
 
-echo [4/5] Installing PyTorch for NVIDIA GPU (CUDA)...
+echo [5/6] Installing PyTorch for NVIDIA GPU (CUDA)...
 echo      This is the slowest step. Please be patient.
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 if %errorlevel% neq 0 (
@@ -50,7 +65,7 @@ if %errorlevel% neq 0 (
 echo      PyTorch installed.
 echo.
 
-echo [5/5] Setup Complete!
+echo [6/6] Setup Complete!
 echo ======================================================
 echo.
 echo To use CHAOS, open a terminal in this folder and run:

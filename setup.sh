@@ -16,7 +16,22 @@ fi
 echo "      Python 3 found."
 echo
 
-echo "[2/5] Creating virtual environment 'venv'..."
+echo "[2/5] Checking for FFmpeg..."
+if ! command -v ffmpeg &> /dev/null; then
+    echo "      FFmpeg not found. Installing via Homebrew..."
+    if ! command -v brew &> /dev/null; then
+        echo "ERROR: Homebrew not found. Please install Homebrew first:"
+        echo "      /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+        exit 1
+    fi
+    brew install ffmpeg || exit 1
+    echo "      FFmpeg installed."
+else
+    echo "      FFmpeg found."
+fi
+echo
+
+echo "[3/6] Creating virtual environment 'venv'..."
 if [ -d "venv" ]; then
     echo "      Virtual environment exists. Skipping."
 else
@@ -25,19 +40,19 @@ else
 fi
 echo
 
-echo "[3/5] Activating environment and installing base packages..."
+echo "[4/6] Activating environment and installing base packages..."
 source venv/bin/activate
 pip install -r requirements.txt || exit 1
 echo "      Base packages installed."
 echo
 
-echo "[4/5] Installing PyTorch for Apple Silicon (MPS) / CPU..."
+echo "[5/6] Installing PyTorch for Apple Silicon (MPS) / CPU..."
 echo "      This is the slowest step. Please be patient."
 pip install torch torchvision torchaudio || exit 1
 echo "      PyTorch installed."
 echo
 
-echo "[5/5] Setup Complete!"
+echo "[6/6] Setup Complete!"
 echo "======================================================"
 echo
 echo "To use CHAOS, open a terminal in this folder and run:"
