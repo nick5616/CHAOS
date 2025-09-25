@@ -15,6 +15,7 @@ from desktop_app.gui.tabs.pipeline_tab import PipelineTab
 from desktop_app.gui.tabs.results_tab import ResultsTab
 from desktop_app.gui.tabs.advanced_tab import AdvancedTab
 from desktop_app.gui.utils.config_manager import ConfigManager
+from desktop_app.gui.utils.theme_manager import ThemeManager
 
 
 class ChaosMainWindow(QMainWindow):
@@ -23,8 +24,10 @@ class ChaosMainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.config_manager = ConfigManager()
+        self.theme_manager = ThemeManager()
         self.init_ui()
         self.load_config()
+        self.apply_theme()
         
     def init_ui(self):
         """Initialize the user interface."""
@@ -148,6 +151,17 @@ class ChaosMainWindow(QMainWindow):
         """Show a warning message dialog."""
         QMessageBox.warning(self, "Warning", message)
         
+    def apply_theme(self):
+        """Apply the current theme to the application."""
+        try:
+            config = self.config_manager.load_config()
+            gui_config = config.get('gui', {})
+            theme_name = gui_config.get('theme', 'default')
+            self.theme_manager.apply_theme(theme_name)
+        except Exception as e:
+            print(f"Error applying theme: {e}")
+            self.theme_manager.apply_theme('default')
+    
     def closeEvent(self, event):
         """Handle application close event."""
         try:
