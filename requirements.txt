@@ -11,3 +11,10 @@ easyocr
 openai-whisper @ git+https://github.com/openai/whisper.git
 librosa
 thefuzz
+
+# GUI Framework
+PyQt6
+
+# Enhanced functionality
+Pillow
+psutil
