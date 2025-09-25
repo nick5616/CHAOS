@@ -1,0 +1,115 @@
+#!/bin/bash
+# CHAOS macOS Installer - Double-click to install
+
+# Get the directory where this script is located
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+SOURCE_DIR="$(dirname "$(dirname "$(dirname "$SCRIPT_DIR")")")"
+
+# Show welcome dialog
+osascript -e 'display dialog "Welcome to CHAOS Desktop Application Installer!
+
+This will install CHAOS to your Applications folder and make it available in Spotlight search.
+
+Click OK to continue." buttons {"Cancel", "Install"} default button "Install" with icon note'
+
+if [ $? -ne 0 ]; then
+    echo "Installation cancelled by user"
+    exit 0
+fi
+
+# Create installation directory
+INSTALL_DIR="$HOME/Applications/CHAOS"
+echo "Installing CHAOS to: $INSTALL_DIR"
+
+# Create directory
+mkdir -p "$INSTALL_DIR"
+
+# Copy files
+echo "Copying application files..."
+cp -r "$SOURCE_DIR/chaos_lib" "$INSTALL_DIR/"
+cp -r "$SOURCE_DIR/desktop_app" "$INSTALL_DIR/"
+cp "$SOURCE_DIR/config.yaml" "$INSTALL_DIR/"
+cp "$SOURCE_DIR/requirements.txt" "$INSTALL_DIR/"
+
+# Create virtual environment
+echo "Setting up Python environment..."
+cd "$INSTALL_DIR"
+python3 -m venv venv
+source venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+
+# Create launcher
+echo "Creating launcher..."
+cat > "$INSTALL_DIR/start_chaos.sh" << 'LAUNCHER_EOF'
+#!/bin/bash
+cd "$(dirname "$0")"
+source venv/bin/activate
+python desktop_app/main_gui.py
+LAUNCHER_EOF
+chmod +x "$INSTALL_DIR/start_chaos.sh"
+
+# Create app bundle
+echo "Creating application bundle..."
+mkdir -p "$HOME/Applications/CHAOS.app/Contents/MacOS"
+mkdir -p "$HOME/Applications/CHAOS.app/Contents/Resources"
+
+# Create Info.plist
+cat > "$HOME/Applications/CHAOS.app/Contents/Info.plist" << 'PLIST_EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>chaos</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.chaos.desktop</string>
+    <key>CFBundleName</key>
+    <string>CHAOS</string>
+    <key>CFBundleDisplayName</key>
+    <string>CHAOS</string>
+    <key>CFBundleVersion</key>
+    <string>1.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleSignature</key>
+    <string>????</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>10.14</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+</dict>
+</plist>
+PLIST_EOF
+
+# Create launcher script
+cat > "$HOME/Applications/CHAOS.app/Contents/MacOS/chaos" << 'APP_LAUNCHER_EOF'
+#!/bin/bash
+CHAOS_DIR="$HOME/Applications/CHAOS"
+if [ ! -d "$CHAOS_DIR" ]; then
+    osascript -e 'display dialog "CHAOS is not installed. Please run the installer first." buttons {"OK"} default button "OK" with icon stop'
+    exit 1
+fi
+cd "$CHAOS_DIR"
+exec ./start_chaos.sh
+APP_LAUNCHER_EOF
+chmod +x "$HOME/Applications/CHAOS.app/Contents/MacOS/chaos"
+
+# Register with Launch Services
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$HOME/Applications/CHAOS.app"
+
+# Show success dialog
+osascript -e 'display dialog "CHAOS has been successfully installed!
+
+You can now:
+• Search for 'CHAOS' in Spotlight (Cmd+Space)
+• Find it in your Applications folder
+• Launch it from Launchpad
+
+The application is ready to use!" buttons {"OK"} default button "OK" with icon note'
+
+echo "Installation complete!"
