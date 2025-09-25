@@ -446,13 +446,28 @@ class ThemeManager(QObject):
             theme_name = "default"
             
         self.current_theme = theme_name
-        stylesheet = self.themes[theme_name]
         
         app = QApplication.instance()
         if app:
-            app.setStyleSheet(stylesheet)
+            if theme_name == "default":
+                # For default theme, use system styling (no custom stylesheet)
+                app.setStyleSheet("")
+                # Apply system palette for proper dark mode support
+                self.apply_system_palette()
+            else:
+                # Apply custom theme stylesheet
+                stylesheet = self.themes[theme_name]
+                app.setStyleSheet(stylesheet)
             
         self.theme_changed.emit(theme_name)
+        
+    def apply_system_palette(self):
+        """Apply system palette for proper dark mode support."""
+        app = QApplication.instance()
+        if app:
+            # Let the system handle the palette automatically
+            # This ensures proper dark mode support on macOS and other systems
+            app.setPalette(QApplication.style().standardPalette())
         
     def get_available_themes(self):
         """Get list of available themes."""

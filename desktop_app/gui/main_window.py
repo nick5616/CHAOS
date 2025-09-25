@@ -160,6 +160,7 @@ class ChaosMainWindow(QMainWindow):
             self.theme_manager.apply_theme(theme_name)
         except Exception as e:
             print(f"Error applying theme: {e}")
+            # Always fall back to default theme which respects system dark mode
             self.theme_manager.apply_theme('default')
     
     def closeEvent(self, event):
