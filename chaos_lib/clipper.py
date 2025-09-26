@@ -1,6 +1,7 @@
 import os
 import json
 import subprocess
+import shutil
 from tqdm import tqdm
 
 def run_clipping(config: dict):
@@ -31,9 +32,28 @@ def run_clipping(config: dict):
         output_filename = f"clip_{i+1:04d}_{base_name[:20]}_score_{score}.mp4"
         output_path = os.path.join(output_folder, output_filename)
 
+        # Find FFmpeg executable
+        ffmpeg_path = shutil.which('ffmpeg')
+        if not ffmpeg_path:
+            # Try common FFmpeg locations on Windows
+            common_paths = [
+                r"C:\Users\nickb\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg*\*\bin\ffmpeg.exe",
+                r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
+                r"C:\Program Files (x86)\ffmpeg\bin\ffmpeg.exe"
+            ]
+            for path_pattern in common_paths:
+                import glob
+                matches = glob.glob(path_pattern)
+                if matches:
+                    ffmpeg_path = matches[0]
+                    break
+        
+        if not ffmpeg_path:
+            raise FileNotFoundError("FFmpeg not found. Please ensure FFmpeg is installed and in your PATH.")
+        
         # Use the '-c copy' command for a lossless, fast cut without re-encoding.
         command = [
-            'ffmpeg', '-y', 
+            ffmpeg_path, '-y', 
             '-ss', str(start_time), 
             '-i', source_video,
             '-t', str(duration), 
