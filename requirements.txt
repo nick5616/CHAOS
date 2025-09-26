@@ -18,3 +18,10 @@ PyQt6
 # Enhanced functionality
 Pillow
 psutil
+
+# GPU Support (install with CUDA if available)
+# For CUDA 12.1: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# For CPU only: pip install torch torchvision torchaudio
+torch
+torchvision
+torchaudio

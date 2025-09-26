@@ -1,4 +1,5 @@
-captures_folder: /Users/nick/Desktop/Captures
+# captures_folder: /Users/nick/Desktop/Captures # Mac
+captures_folder: "D:\\Captures\\Counter-strike 2" # Windows
 data_folder: ./data
 final_clips_folder: ./final_clips
 player_names:

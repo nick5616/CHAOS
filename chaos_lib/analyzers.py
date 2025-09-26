@@ -240,18 +240,26 @@ def run_analysis(config: dict):
         return
     print("Initializing AI Models (EasyOCR & Whisper)...")
     import easyocr
-    ocr_reader = easyocr.Reader(['en'], gpu=True)
-    whisper_model = whisper.load_model(config['whisper_model'])
+    
+    # Check if GPU should be used
+    use_gpu = config.get('use_gpu', False)
+    if use_gpu:
+        print("GPU acceleration enabled for AI models")
+    else:
+        print("Using CPU for AI models")
+    
+    ocr_reader = easyocr.Reader(['en'], gpu=use_gpu)
+    whisper_model = whisper.load_model(config['whisper_model'], device='cuda' if use_gpu else 'cpu')
     all_events = []
     progress = tqdm(video_paths, desc="Analyzing Videos")
     for video_path in progress:
         base_name = os.path.basename(video_path)
         progress.set_description(f"Analyzing {base_name[:30]}...")
         kill_events = analyze_killfeed(video_path, config, ocr_reader)
-        chat_events = analyze_chat(video_path, config, ocr_reader)
+        # chat_events = analyze_chat(video_path, config, ocr_reader)
         voice_events, spike_events = analyze_audio(video_path, whisper_model, os.path.join(data_folder, "temp_audio"))
         all_events.extend(kill_events)
-        all_events.extend(chat_events)
+        # all_events.extend(chat_events)
         all_events.extend(spike_events)
         all_events.extend(voice_events)
     events_path = os.path.join(data_folder, "all_events.json")

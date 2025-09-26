@@ -18,6 +18,30 @@ This repository documents my attempt to fight creative burnout with code, turnin
 
 ## 🔧 Setup & Installation
 
+### Automated Setup (Recommended)
+
+The setup scripts will automatically install all dependencies including FFmpeg:
+
+**Windows:**
+```bash
+# Option 1: Batch script (tries winget, chocolatey, then direct download)
+setup.bat
+
+# Option 2: PowerShell script (more reliable)
+setup.ps1
+
+# Option 3: Manual FFmpeg installation if needed
+install_ffmpeg.ps1
+```
+
+**Linux/macOS:**
+```bash
+# Automatically detects your package manager and installs FFmpeg
+./setup.sh
+```
+
+### Manual Setup (If automated fails)
+
 CHAOS is designed to work on both **Windows (with NVIDIA GPUs)** and **macOS (with Apple Silicon)**. The setup scripts will automatically handle the platform-specific dependencies for you.
 
 ### 🚀 Getting Started
