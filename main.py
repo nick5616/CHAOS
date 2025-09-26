@@ -233,10 +233,10 @@ class RobustPipeline:
 
 def main():
     parser = argparse.ArgumentParser(description='CHAOS: Robust CS2 Highlight Analysis & Organization System')
-    parser.add_argument('stage', choices=['all', 'ingest', 'analyze', 'analyze-parallel', 'summary', 'status', 'reset'], 
+    parser.add_argument('stage', choices=['all', 'ingest', 'analyze', 'summary', 'status', 'reset'], 
                         help='The pipeline stage to run.')
     parser.add_argument('--workers', type=int, default=1, 
-                        help='Number of parallel workers for analyze-parallel stage (default: 1)')
+                        help='Number of parallel workers for analyze stage (default: 1, use >1 for parallel processing)')
     parser.add_argument('--debug', action='store_true', 
                         help='Debug mode: process only the first w videos where w is the number of workers')
     parser.add_argument('--gpu', action='store_true', 
@@ -264,9 +264,6 @@ def main():
             return
     
     if args.stage in ['all', 'analyze']:
-        pipeline.run_analysis_sequential(debug_mode=args.debug, max_videos=args.workers if args.debug else None, use_gpu=args.gpu)
-    
-    if args.stage == 'analyze-parallel':
         pipeline.run_analysis_parallel(args.workers, debug_mode=args.debug, use_gpu=args.gpu)
     
     if args.stage in ['all', 'summary']:
