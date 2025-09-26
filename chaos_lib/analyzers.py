@@ -30,22 +30,12 @@ def _extract_audio(video_path: str, temp_dir: str) -> str:
     return output_path
 
 # --- FINAL, ROBUST PARSING & IDENTIFICATION LOGIC ---
-def _parse_and_identify_kill(text: str, known_players: list) -> dict | None:
+def _parse_and_identify_kill(text: str) -> dict | None:
     """
     Parses a raw OCR string from the killfeed to extract all relevant details.
+    Since we're using red rectangle detection, any detected kill is valid.
     """
-    # 1. Identify if this is a player kill using robust fuzzy matching
-    is_player_kill = False
-    detected_player = "Unknown"
-    highest_match_score = 0
-    for name in known_players:
-        match_score = fuzz.partial_ratio(name, text)
-        if match_score > 90 and match_score > highest_match_score:
-            detected_player = name # Use the full, non-abbreviated name
-            is_player_kill = True
-            highest_match_score = match_score
-
-    # 2. Parse out the victim and assister
+    # Parse out the victim and assister
     victim = "Unknown"
     assister = None
     parts = text.split()
@@ -65,20 +55,19 @@ def _parse_and_identify_kill(text: str, known_players: list) -> dict | None:
         except ValueError:
             pass # No '+' found
             
-    # If we didn't identify a known player, do a simple parse for the killer
-    if not is_player_kill:
-        if ' + ' in text:
-            detected_player = text.split(' + ')[0].strip()
-        elif ' ► ' in text:
-            detected_player = text.split(' ► ')[0].strip()
-        else:
-            detected_player = parts[0]
+    # Parse the killer from the text
+    if ' + ' in text:
+        detected_player = text.split(' + ')[0].strip()
+    elif ' ► ' in text:
+        detected_player = text.split(' ► ')[0].strip()
+    else:
+        detected_player = parts[0]
 
     return {
         "killer": detected_player,
         "assister": assister,
         "victim": victim,
-        "is_player_kill": is_player_kill,
+        "is_player_kill": True,  # Always True since red rectangle detection is sufficient
         "raw_text": text
     }
 
@@ -133,7 +122,7 @@ def analyze_killfeed(video_path: str, config: dict, reader) -> list:
             if not ocr_result: continue
             
             full_text = " ".join(ocr_result)
-            parsed_info = _parse_and_identify_kill(full_text, config['player_names'])
+            parsed_info = _parse_and_identify_kill(full_text)
             
             if not parsed_info or not parsed_info.get('victim'): continue
 
