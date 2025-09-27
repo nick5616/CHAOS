@@ -26,8 +26,10 @@ class RobustPipeline:
                 return json.load(f)
         return {
             'ingestion_completed': False,
+            'rerunFailed': False,
             'videos_processed': [],
             'videos_failed': [],
+            'failure_reasons': {},
             'current_stage': 'ingestion',
             'start_time': None,
             'last_update': None
@@ -68,7 +70,13 @@ class RobustPipeline:
         all_videos = self.get_video_list()
         processed = set(self.progress['videos_processed'])
         failed = set(self.progress['videos_failed'])
-        unprocessed = [v for v in all_videos if v not in processed and v not in failed]
+        
+        # If rerunFailed is True, only include failed videos for reprocessing
+        if self.progress.get('rerunFailed', False):
+            unprocessed = [v for v in all_videos if v in failed]
+            print(f'Rerun failed mode: Processing only {len(unprocessed)} previously failed videos')
+        else:
+            unprocessed = [v for v in all_videos if v not in processed and v not in failed]
         
         if debug_mode and max_videos is not None:
             unprocessed = unprocessed[:max_videos]
@@ -104,14 +112,24 @@ class RobustPipeline:
             clipper.run_clipping(video_config)
             
             self.progress['videos_processed'].append(video_path)
+            
+            # If this video was previously failed, remove it from failed list and failure reasons
+            if video_path in self.progress['videos_failed']:
+                self.progress['videos_failed'].remove(video_path)
+                if video_path in self.progress['failure_reasons']:
+                    del self.progress['failure_reasons'][video_path]
+                print(f'   Previously failed video now completed: {video_name}')
+            
             self.save_progress()
             
             print(f'   Completed: {video_name}')
             return True
             
         except Exception as e:
-            print(f'   Failed: {video_name} - {e}')
+            error_message = str(e)
+            print(f'   Failed: {video_name} - {error_message}')
             self.progress['videos_failed'].append(video_path)
+            self.progress['failure_reasons'][video_path] = error_message
             self.save_progress()
             return False
     
@@ -217,13 +235,23 @@ class RobustPipeline:
         if failed > 0:
             print(f'\nFailed videos:')
             for video in self.progress['videos_failed']:
-                print(f'  - {os.path.basename(video)}')
+                failure_reason = self.progress['failure_reasons'].get(video, 'Unknown error')
+                print(f'  - {os.path.basename(video)}: {failure_reason}')
+    
+    def set_rerun_failed(self, enabled=True):
+        """Set the rerunFailed flag to control whether to reprocess failed videos"""
+        self.progress['rerunFailed'] = enabled
+        self.save_progress()
+        status = "enabled" if enabled else "disabled"
+        print(f'Rerun failed videos: {status}')
     
     def reset_progress(self):
         self.progress = {
             'ingestion_completed': False,
+            'rerunFailed': False,
             'videos_processed': [],
             'videos_failed': [],
+            'failure_reasons': {},
             'current_stage': 'ingestion',
             'start_time': None,
             'last_update': None
@@ -233,7 +261,7 @@ class RobustPipeline:
 
 def main():
     parser = argparse.ArgumentParser(description='CHAOS: Robust CS2 Highlight Analysis & Organization System')
-    parser.add_argument('stage', choices=['all', 'ingest', 'analyze', 'summary', 'status', 'reset'], 
+    parser.add_argument('stage', choices=['all', 'ingest', 'analyze', 'summary', 'status', 'reset', 'rerun-failed'], 
                         help='The pipeline stage to run.')
     parser.add_argument('--workers', type=int, default=1, 
                         help='Number of parallel workers for analyze stage (default: 1, use >1 for parallel processing)')
@@ -243,6 +271,10 @@ def main():
                         help='Use GPU acceleration for AI models (requires CUDA-compatible GPU and proper PyTorch installation)')
     parser.add_argument('--config', default='config.yaml', 
                         help='Path to config file (default: config.yaml)')
+    parser.add_argument('--rerun-failed', action='store_true', 
+                        help='Enable rerunning of previously failed videos')
+    parser.add_argument('--no-rerun-failed', action='store_true', 
+                        help='Disable rerunning of previously failed videos')
     args = parser.parse_args()
 
     os.makedirs('./data', exist_ok=True)
@@ -251,12 +283,23 @@ def main():
 
     pipeline = RobustPipeline(args.config)
     
+    # Handle rerun-failed flag arguments
+    if args.rerun_failed:
+        pipeline.set_rerun_failed(True)
+    elif args.no_rerun_failed:
+        pipeline.set_rerun_failed(False)
+    
     if args.stage == 'status':
         pipeline.show_status()
         return
     
     if args.stage == 'reset':
         pipeline.reset_progress()
+        return
+    
+    if args.stage == 'rerun-failed':
+        pipeline.set_rerun_failed(True)
+        print('Rerun failed videos enabled. Run analyze stage to reprocess failed videos.')
         return
     
     if args.stage in ['all', 'ingest']:

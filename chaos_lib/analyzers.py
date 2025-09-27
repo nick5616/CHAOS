@@ -10,6 +10,46 @@ import shutil
 from tqdm import tqdm
 from thefuzz import fuzz
 
+def scale_roi_for_resolution(roi_coords, video_width, video_height, reference_width=2560, reference_height=1440):
+    """
+    Scale ROI coordinates from reference resolution to actual video resolution.
+    
+    Args:
+        roi_coords: [x1, y1, x2, y2] coordinates for reference resolution
+        video_width: Actual video width
+        video_height: Actual video height
+        reference_width: Reference resolution width (default: 2560 for ultrawide)
+        reference_height: Reference resolution height (default: 1440)
+    
+    Returns:
+        [x1, y1, x2, y2] scaled coordinates for actual video resolution
+    """
+    x1, y1, x2, y2 = roi_coords
+    
+    # Calculate scaling factors
+    width_scale = video_width / reference_width
+    height_scale = video_height / reference_height
+    
+    # Scale coordinates
+    scaled_x1 = int(x1 * width_scale)
+    scaled_y1 = int(y1 * height_scale)
+    scaled_x2 = int(x2 * width_scale)
+    scaled_y2 = int(y2 * height_scale)
+    
+    # Ensure coordinates are within video bounds
+    scaled_x1 = max(0, min(scaled_x1, video_width))
+    scaled_y1 = max(0, min(scaled_y1, video_height))
+    scaled_x2 = max(0, min(scaled_x2, video_width))
+    scaled_y2 = max(0, min(scaled_y2, video_height))
+    
+    # Ensure x2 > x1 and y2 > y1
+    if scaled_x2 <= scaled_x1:
+        scaled_x2 = min(scaled_x1 + 10, video_width)
+    if scaled_y2 <= scaled_y1:
+        scaled_y2 = min(scaled_y1 + 10, video_height)
+    
+    return [scaled_x1, scaled_y1, scaled_x2, scaled_y2]
+
 # (Helper functions _save_debug_screenshot and _extract_audio remain the same)
 def _save_debug_screenshot(config: dict, image, video_path: str, event_type: str, timestamp: float, suffix: str = ""):
     if not config.get('debug_mode', False): return
@@ -88,9 +128,19 @@ def analyze_killfeed(video_path: str, config: dict, reader) -> list:
     if not cap.isOpened(): return []
 
     frame_step = config['ocr_frame_step']
-    x1, y1, x2, y2 = config['killfeed_roi']
+    
+    # Get video resolution and scale ROI accordingly
+    video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    roi_coords = config['killfeed_roi']
+    x1, y1, x2, y2 = scale_roi_for_resolution(roi_coords, video_width, video_height)
+    
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = cap.get(cv2.CAP_PROP_FPS)
+    
+    print(f"Video resolution: {video_width}x{video_height}")
+    print(f"Original killfeed ROI: {roi_coords}")
+    print(f"Scaled killfeed ROI: [{x1}, {y1}, {x2}, {y2}]")
 
     for frame_idx in range(0, total_frames, frame_step):
         cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
@@ -163,13 +213,21 @@ def analyze_killfeed(video_path: str, config: dict, reader) -> list:
     return kill_events
 
 def analyze_chat(video_path: str, config: dict, reader) -> list:
-    x1, y1, x2, y2 = config['chat_roi']
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened(): return []
+    
+    # Get video resolution and scale ROI accordingly
+    video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    roi_coords = config['chat_roi']
+    x1, y1, x2, y2 = scale_roi_for_resolution(roi_coords, video_width, video_height)
+    
     events = []
     frame_step = config['ocr_frame_step']
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = cap.get(cv2.CAP_PROP_FPS)
+    
+    print(f"Scaled chat ROI: [{x1}, {y1}, {x2}, {y2}]")
     for frame_idx in range(0, total_frames, frame_step):
         cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
         ret, frame = cap.read()

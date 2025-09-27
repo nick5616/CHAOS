@@ -2,6 +2,8 @@ import cv2
 import numpy as np
 import yaml
 import argparse
+# Import the ROI scaling function from analyzers
+from chaos_lib.analyzers import scale_roi_for_resolution
 
 def tune_kill_detection(video_path: str, start_time: int, config_path: str = 'config.yaml'):
     print("--- CHAOS Kill Detection Tuner ---")
@@ -25,6 +27,11 @@ def tune_kill_detection(video_path: str, start_time: int, config_path: str = 'co
     if not cap.isOpened():
         print(f"Error: Could not open video file at {video_path}")
         return
+        
+    # Get video resolution for ROI scaling
+    video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    print(f"Video resolution: {video_width}x{video_height}")
         
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = cap.get(cv2.CAP_PROP_FPS)
@@ -58,7 +65,8 @@ def tune_kill_detection(video_path: str, start_time: int, config_path: str = 'co
         min_h = config['killfeed_rect_min_height']
         max_h = config['killfeed_rect_max_height']
         min_aspect_ratio = config['killfeed_rect_min_aspect_ratio']
-        x1, y1, x2, y2 = config['killfeed_roi']
+        roi_coords = config['killfeed_roi']
+        x1, y1, x2, y2 = scale_roi_for_resolution(roi_coords, video_width, video_height)
         
         killfeed_crop = frame[y1:y2, x1:x2]
         hsv = cv2.cvtColor(killfeed_crop, cv2.COLOR_BGR2HSV)
