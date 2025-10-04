@@ -52,6 +52,17 @@ def run_correlation(config: dict):
             score += weights['multi_kill_bonus']
             tags.add("multi-kill")
             
+        # Check for headshots and smoke kills
+        kill_events = window_df[window_df['type'] == 'kill']
+        for _, kill_event in kill_events.iterrows():
+            details = kill_event['details']
+            if details.get('isHeadshot', False):
+                score += weights['headshot_bonus']
+                tags.add("headshot")
+            if details.get('throughSmoke', False):
+                score += weights['smoke_kill_bonus']
+                tags.add("smoke_kill")
+            
         if any("rage" in d_str for d_str in window_df[window_df['type'] == 'chat']['details_str']):
             score += weights['enemy_rage_chat']
             tags.add("enemy_rage")

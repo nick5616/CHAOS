@@ -29,7 +29,21 @@ def run_clipping(config: dict):
 
         score = int(clip_data['score'])
         base_name = os.path.splitext(os.path.basename(source_video))[0]
-        output_filename = f"clip_{i+1:04d}_{base_name[:20]}_score_{score}.mp4"
+        
+        # Build special kill type suffixes
+        special_types = []
+        tags = clip_data.get('tags', [])
+        if 'headshot' in tags:
+            special_types.append('headshot')
+        if 'smoke_kill' in tags:
+            special_types.append('smoke')
+        
+        # Create filename: <clip_number>_<score>_<special_types>_<filename>
+        special_suffix = '_'.join(special_types) if special_types else ''
+        if special_suffix:
+            output_filename = f"{i+1}_{score}_{special_suffix}_{base_name[:20]}.mp4"
+        else:
+            output_filename = f"{i+1}_{score}_{base_name[:20]}.mp4"
         output_path = os.path.join(output_folder, output_filename)
 
         # Find FFmpeg executable

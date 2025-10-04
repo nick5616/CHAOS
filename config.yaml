@@ -62,6 +62,8 @@ clip_pre_buffer_seconds: 7
 clip_post_buffer_seconds: 8
 scoring_weights:
     kill: 10
+    headshot_bonus: 50
+    smoke_kill_bonus: 40
     multi_kill_bonus: 15
     team_hype_voice: 20
     enemy_rage_chat: 25

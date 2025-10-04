@@ -69,6 +69,85 @@ def _extract_audio(video_path: str, temp_dir: str) -> str:
     subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return output_path
 
+# --- ICON DETECTION FUNCTIONS ---
+def _detect_headshot_icon(image_region):
+    """
+    Detect headshot icon in the killfeed region.
+    Looks for the characteristic skull/bullet icon pattern.
+    """
+    # Convert to grayscale for template matching
+    gray = cv2.cvtColor(image_region, cv2.COLOR_BGR2GRAY)
+    
+    # Look for white/light colored objects (headshot icons are typically white)
+    # Be more restrictive with the color range
+    white_mask = cv2.inRange(gray, 220, 255)  # Only very bright white
+    contours, _ = cv2.findContours(white_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    # Look for specific headshot icon characteristics
+    headshot_icons_found = 0
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        # Headshot icons are typically small, compact shapes
+        if 30 < area < 300:  # Smaller, more restrictive area
+            x, y, w, h = cv2.boundingRect(contour)
+            aspect_ratio = w / h if h > 0 else 0
+            
+            # Headshot icons should be roughly square or slightly rectangular
+            if 0.7 < aspect_ratio < 1.5:
+                # Additional check: look for skull-like shape characteristics
+                # Headshot icons have more complex contours than simple rectangles
+                perimeter = cv2.arcLength(contour, True)
+                if perimeter > 0:
+                    circularity = 4 * np.pi * area / (perimeter * perimeter)
+                    # Headshot icons are moderately circular (skull shape)
+                    if 0.4 < circularity < 0.9:
+                        headshot_icons_found += 1
+    
+    # Only return True if we find exactly 1 headshot icon (not multiple false positives)
+    return headshot_icons_found == 1
+
+def _detect_smoke_icon(image_region):
+    """
+    Detect smoke icon in the killfeed region.
+    Looks for the characteristic cloud/smoke icon pattern.
+    """
+    # Convert to grayscale for template matching
+    gray = cv2.cvtColor(image_region, cv2.COLOR_BGR2GRAY)
+    
+    # Look for smoke icons - they should be very specific cloud-like shapes
+    # Smoke icons are typically medium gray, not bright white like text
+    smoke_mask = cv2.inRange(gray, 120, 200)  # Medium gray range, not bright white
+    contours, _ = cv2.findContours(smoke_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    # Look for specific smoke icon characteristics
+    smoke_icons_found = 0
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        # Smoke icons are typically small, compact shapes
+        if 40 < area < 150:  # Very specific size range for smoke icons
+            x, y, w, h = cv2.boundingRect(contour)
+            aspect_ratio = w / h if h > 0 else 0
+            
+            # Smoke icons should be roughly square or slightly rectangular
+            if 0.7 < aspect_ratio < 1.4:  # More restrictive aspect ratio
+                # Additional checks for cloud-like characteristics
+                perimeter = cv2.arcLength(contour, True)
+                if perimeter > 0:
+                    circularity = 4 * np.pi * area / (perimeter * perimeter)
+                    # Smoke icons are irregular (cloud-like), not circular or rectangular
+                    if 0.2 < circularity < 0.6:  # Very irregular shapes
+                        # Additional check: look for multiple "bumps" like a cloud
+                        hull = cv2.convexHull(contour)
+                        hull_area = cv2.contourArea(hull)
+                        if hull_area > 0:
+                            solidity = area / hull_area
+                            # Smoke icons have low solidity (lots of indentations like a cloud)
+                            if solidity < 0.8:
+                                smoke_icons_found += 1
+    
+    # Only return True if we find exactly 1 smoke icon (not multiple false positives)
+    return smoke_icons_found == 1
+
 # --- FINAL, ROBUST PARSING & IDENTIFICATION LOGIC ---
 def _parse_and_identify_kill(text: str) -> dict | None:
     """
@@ -190,6 +269,14 @@ def analyze_killfeed(video_path: str, config: dict, reader) -> list:
                 
                 # B. THEN, check if it's a kill we care about (one of our kills).
                 if parsed_info['is_player_kill']:
+                    # Detect special kill types (headshot and smoke)
+                    is_headshot = _detect_headshot_icon(kill_line_image)
+                    through_smoke = _detect_smoke_icon(kill_line_image)
+                    
+                    # Debug output for icon detection
+                    if is_headshot or through_smoke:
+                        print(f"  Special kill detected: {parsed_info['victim']} - Headshot: {is_headshot}, Smoke: {through_smoke}")
+                    
                     kill_event = {
                         "source_video": video_path,
                         "timestamp_seconds": timestamp,
@@ -198,7 +285,9 @@ def analyze_killfeed(video_path: str, config: dict, reader) -> list:
                             "raw_text": parsed_info['raw_text'],
                             "detected_player": parsed_info['killer'],
                             "assister": parsed_info['assister'],
-                            "victim": parsed_info['victim']
+                            "victim": parsed_info['victim'],
+                            "isHeadshot": is_headshot,
+                            "throughSmoke": through_smoke
                         }
                     }
                     kill_events.append(kill_event)
@@ -212,35 +301,7 @@ def analyze_killfeed(video_path: str, config: dict, reader) -> list:
     cap.release()
     return kill_events
 
-def analyze_chat(video_path: str, config: dict, reader) -> list:
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened(): return []
-    
-    # Get video resolution and scale ROI accordingly
-    video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    roi_coords = config['chat_roi']
-    x1, y1, x2, y2 = scale_roi_for_resolution(roi_coords, video_width, video_height)
-    
-    events = []
-    frame_step = config['ocr_frame_step']
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    
-    print(f"Scaled chat ROI: [{x1}, {y1}, {x2}, {y2}]")
-    for frame_idx in range(0, total_frames, frame_step):
-        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-        ret, frame = cap.read()
-        if not ret: break
-        cropped_frame = frame[y1:y2, x1:x2]
-        results = reader.readtext(cropped_frame, detail=0, paragraph=True)
-        if results:
-            timestamp = frame_idx / fps
-            full_text = " ".join(results)
-            _save_debug_screenshot(config, cropped_frame, video_path, "chat", timestamp)
-            events.append({"source_video": video_path, "timestamp_seconds": timestamp, "type": "chat", "details": {"text": full_text, "sentiment": "neutral"}})
-    cap.release()
-    return events
+
 
 def analyze_audio(video_path: str, model, temp_dir: str) -> tuple[list, list]:
     audio_path = None

@@ -2,8 +2,8 @@ import cv2
 import numpy as np
 import yaml
 import argparse
-# Import the ROI scaling function from analyzers
-from chaos_lib.analyzers import scale_roi_for_resolution
+# Import the ROI scaling function and icon detection from analyzers
+from chaos_lib.analyzers import scale_roi_for_resolution, _detect_headshot_icon, _detect_smoke_icon
 
 def tune_kill_detection(video_path: str, start_time: int, config_path: str = 'config.yaml'):
     print("--- CHAOS Kill Detection Tuner ---")
@@ -91,18 +91,83 @@ def tune_kill_detection(video_path: str, start_time: int, config_path: str = 'co
             aspect_ok = aspect_ratio >= min_aspect_ratio
             is_valid_kill = height_ok and aspect_ok
             
+            # Check for special kill types
+            kill_region = killfeed_crop[y:y+h, x:x+w]
+            is_headshot = _detect_headshot_icon(kill_region)
+            through_smoke = _detect_smoke_icon(kill_region)
+            
             print(f"Contour #{i}: Pos=({x},{y}) Size=({w}x{h}) Height OK? {height_ok} | Aspect Ratio={aspect_ratio:.2f} OK? {aspect_ok}")
+            if is_headshot:
+                print(f"  -> HEADSHOT DETECTED!")
+            if through_smoke:
+                print(f"  -> SMOKE KILL DETECTED!")
 
-            color = (0, 255, 0) if is_valid_kill else (0, 0, 255)
+            # Color coding: Green=valid, Red=invalid, Blue=headshot, Orange=smoke
+            if is_headshot:
+                color = (255, 0, 0)  # Blue for headshot
+            elif through_smoke:
+                color = (0, 165, 255)  # Orange for smoke
+            elif is_valid_kill:
+                color = (0, 255, 0)  # Green for valid
+            else:
+                color = (0, 0, 255)  # Red for invalid
+                
+            # Draw main kill rectangle
             cv2.rectangle(contours_visualization, (x, y), (x + w, y + h), color, 2)
             cv2.putText(contours_visualization, f"H:{h}", (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
             cv2.putText(contours_visualization, f"AR:{aspect_ratio:.1f}", (x, y + h + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+            
+            # Draw individual icon detection rectangles
+            if is_headshot or through_smoke:
+                # Find and highlight the specific icon that was detected
+                gray = cv2.cvtColor(kill_region, cv2.COLOR_BGR2GRAY)
+                if is_headshot:
+                    # Look for headshot icon specifically
+                    white_mask = cv2.inRange(gray, 220, 255)
+                    icon_contours, _ = cv2.findContours(white_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    for icon_cnt in icon_contours:
+                        icon_area = cv2.contourArea(icon_cnt)
+                        if 30 < icon_area < 300:
+                            icon_x, icon_y, icon_w, icon_h = cv2.boundingRect(icon_cnt)
+                            # Draw blue rectangle around the detected headshot icon
+                            cv2.rectangle(contours_visualization, 
+                                        (x + icon_x, y + icon_y), 
+                                        (x + icon_x + icon_w, y + icon_y + icon_h), 
+                                        (255, 0, 0), 3)  # Bright blue for headshot icon
+                            cv2.putText(contours_visualization, "HS", 
+                                      (x + icon_x, y + icon_y - 5), 
+                                      cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255, 0, 0), 1)
+                
+                if through_smoke:
+                    # Look for smoke icon specifically - use same logic as detection
+                    smoke_mask = cv2.inRange(gray, 120, 200)  # Medium gray, not bright white
+                    icon_contours, _ = cv2.findContours(smoke_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    for icon_cnt in icon_contours:
+                        icon_area = cv2.contourArea(icon_cnt)
+                        if 40 < icon_area < 150:  # Same size range as detection
+                            icon_x, icon_y, icon_w, icon_h = cv2.boundingRect(icon_cnt)
+                            icon_aspect = icon_w / icon_h if icon_h > 0 else 0
+                            if 0.7 < icon_aspect < 1.4:  # Same aspect ratio as detection
+                                # Draw orange rectangle around the detected smoke icon
+                                cv2.rectangle(contours_visualization, 
+                                            (x + icon_x, y + icon_y), 
+                                            (x + icon_x + icon_w, y + icon_y + icon_h), 
+                                            (0, 165, 255), 3)  # Orange for smoke icon
+                                cv2.putText(contours_visualization, "SM", 
+                                          (x + icon_x, y + icon_y - 5), 
+                                          cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 165, 255), 1)
+            
+            # Add special labels
+            if is_headshot:
+                cv2.putText(contours_visualization, "HEADSHOT", (x, y + h + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+            if through_smoke:
+                cv2.putText(contours_visualization, "SMOKE", (x, y + h + 45), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
 
         # Display the windows
         cv2.imshow("Original Full Frame (press 'j' to jump)", cv2.resize(frame, (960, 540)))
         cv2.imshow("Killfeed ROI", killfeed_crop)
         cv2.imshow("Red Mask", red_mask)
-        cv2.imshow("Contours (Green=Pass, Red=Fail)", contours_visualization)
+        cv2.imshow("Contours (Green=Valid, Red=Invalid, Blue=Headshot, Orange=Smoke)", contours_visualization)
 
         # --- Keyboard Controls ---
         key = cv2.waitKey(0) & 0xFF
