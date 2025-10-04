@@ -295,7 +295,18 @@ def run_analysis(config: dict):
     else:
         print("Using CPU for AI models")
     
-    ocr_reader = easyocr.Reader(['en'], gpu=use_gpu)
+    # Platform-specific GPU handling
+    import platform
+    system = platform.system()
+    
+    if system == 'Darwin' and use_gpu:
+        # macOS: Force CPU usage to avoid MPS compatibility issues with EasyOCR
+        # EasyOCR has issues with torch.mps.current_device() in newer PyTorch versions
+        print("macOS detected: Using CPU to avoid MPS compatibility issues")
+        ocr_reader = easyocr.Reader(['en'], gpu=False)
+    else:
+        # Windows/Linux: Use GPU acceleration normally, or CPU if disabled
+        ocr_reader = easyocr.Reader(['en'], gpu=use_gpu)
     whisper_model = whisper.load_model(config['whisper_model'], device='cuda' if use_gpu else 'cpu')
     all_events = []
     progress = tqdm(video_paths, desc="Analyzing Videos")

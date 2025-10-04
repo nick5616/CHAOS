@@ -1,56 +1,57 @@
-# captures_folder: /Users/nick/Desktop/Captures # Mac
-captures_folder: "D:\\Captures\\Counter-strike 2" # Windows
+# AI, quit deleting these comments!
+captures_folder: /Users/nick/Desktop/Captures # Mac
+# captures_folder: "D:\\Captures\\Counter-strike 2" # Windows
 data_folder: ./data
 final_clips_folder: ./final_clips
 player_names:
-- stingered by an WAS
-- marmalade sandwich
-- IZI KATKA
-- hot dog dog
-- excellent mage
-- pistol mage
+    - stingered by an WAS
+    - marmalade sandwich
+    - IZI KATKA
+    - hot dog dog
+    - excellent mage
+    - pistol mage
 killfeed_roi:
-- 1920
-- 40
-- 2550
-- 300
+    - 1920
+    - 40
+    - 2550
+    - 300
 chat_roi:
-- 30
-- 1150
-- 650
-- 1300
+    - 30
+    - 1150
+    - 650
+    - 1300
 red_hsv_lower1:
-- 0
-- 120
-- 70
+    - 0
+    - 180
+    - 120
 red_hsv_upper1:
-- 10
-- 255
-- 255
+    - 10
+    - 255
+    - 255
 red_hsv_lower2:
-- 170
-- 120
-- 70
+    - 170
+    - 180
+    - 120
 red_hsv_upper2:
-- 180
-- 255
-- 255
+    - 180
+    - 255
+    - 255
 t_orange_hsv_lower:
-- 10
-- 150
-- 150
+    - 10
+    - 150
+    - 150
 t_orange_hsv_upper:
-- 25
-- 255
-- 255
+    - 25
+    - 255
+    - 255
 ct_blue_hsv_lower:
-- 100
-- 150
-- 150
+    - 100
+    - 150
+    - 150
 ct_blue_hsv_upper:
-- 130
-- 255
-- 255
+    - 130
+    - 255
+    - 255
 killfeed_rect_min_height: 25
 killfeed_rect_max_height: 50
 killfeed_rect_min_aspect_ratio: 8.0
@@ -60,36 +61,36 @@ whisper_model: base
 clip_pre_buffer_seconds: 7
 clip_post_buffer_seconds: 8
 scoring_weights:
-  kill: 10
-  multi_kill_bonus: 15
-  team_hype_voice: 20
-  enemy_rage_chat: 25
-  audio_spike: 5
+    kill: 10
+    multi_kill_bonus: 15
+    team_hype_voice: 20
+    enemy_rage_chat: 25
+    audio_spike: 5
 gui:
-  window_size:
-  - 1200
-  - 770
-  theme: default
-  auto_save: true
+    window_size:
+        - 1200
+        - 770
+    theme: default
+    auto_save: true
 system:
-  cuda_available: false
-  pytorch_version: cpu
-  ffmpeg_path: ffmpeg
-  ffmpeg_available: false
-  dependencies_installed: false
+    cuda_available: false
+    pytorch_version: cpu
+    ffmpeg_path: ffmpeg
+    ffmpeg_available: false
+    dependencies_installed: false
 roi:
-  killfeed:
-  - 1920
-  - 40
-  - 2550
-  - 300
-  chat:
-  - 30
-  - 1150
-  - 650
-  - 1300
-  video_source: auto
+    killfeed:
+        - 1920
+        - 40
+        - 2550
+        - 300
+    chat:
+        - 30
+        - 1150
+        - 650
+        - 1300
+    video_source: auto
 pipeline:
-  auto_start: false
-  show_logs: true
-  save_debug: false
+    auto_start: false
+    show_logs: true
+    save_debug: false
