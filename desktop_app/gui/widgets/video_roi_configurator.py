@@ -435,7 +435,7 @@ class VideoROIConfigurator(QWidget):
         
     def test_detection(self):
         """Test ROI detection on current frame."""
-        if not self.current_frame or not self.killfeed_roi or not self.chat_roi:
+        if self.current_frame is None or not self.killfeed_roi or not self.chat_roi:
             QMessageBox.warning(self, "Test Error", "Please configure both ROI regions first")
             return None
             

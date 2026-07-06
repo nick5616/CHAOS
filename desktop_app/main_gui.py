@@ -9,6 +9,11 @@ import sys
 import os
 from pathlib import Path
 
+# Must be imported before PyQt6/cv2/torch: those claim Windows DLL TLS slots
+# on load, and if none are left by the time llvmlite (via numba/whisper)
+# tries to init, it fails with WinError 1114.
+import numba
+
 # Add the project root to the Python path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
