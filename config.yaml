@@ -68,8 +68,8 @@ scoring_weights:
   smoke_kill_bonus: 40
 gui:
   window_size:
-  - 1222
-  - 940
+  - 1050
+  - 1253
   theme: cs2
   auto_save: true
   setup_complete: true
