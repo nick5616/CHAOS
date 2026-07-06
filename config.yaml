@@ -57,21 +57,22 @@ kill_memory_duration_seconds: 7.0
 ocr_frame_step: 30
 whisper_model: base
 clip_pre_buffer_seconds: 7
-clip_post_buffer_seconds: 8
+clip_post_buffer_seconds: 6
 scoring_weights:
   kill: 10
-  headshot_bonus: 50
-  smoke_kill_bonus: 40
   multi_kill_bonus: 15
   team_hype_voice: 20
   enemy_rage_chat: 25
   audio_spike: 5
+  headshot_bonus: 50
+  smoke_kill_bonus: 40
 gui:
   window_size:
-  - 1200
-  - 770
-  theme: default
+  - 1222
+  - 940
+  theme: cs2
   auto_save: true
+  setup_complete: true
 system:
   cuda_available: false
   pytorch_version: cpu
@@ -94,3 +95,5 @@ pipeline:
   auto_start: false
   show_logs: true
   save_debug: false
+  analysis_workers: 2
+  clip_workers: 4

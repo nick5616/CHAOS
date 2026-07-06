@@ -3,6 +3,85 @@ import json
 import pandas as pd
 from tqdm import tqdm
 
+
+def correlate_video_events(video_path: str, events: list, config: dict) -> list:
+    """
+    Correlate events from a single already-analysed video.
+    Returns a list of merged highlight specs for that video only.
+    Called immediately after each video finishes analysis in the streaming pipeline.
+    """
+    if not events:
+        return []
+
+    df = pd.DataFrame(events)
+    df['details_str'] = df['details'].astype(str)
+
+    weights   = config['scoring_weights']
+    pre_buf   = config['clip_pre_buffer_seconds']
+    post_buf  = config['clip_post_buffer_seconds']
+
+    potential = []
+    for trigger in df[df['type'] == 'kill'].to_dict('records'):
+        ts   = trigger['timestamp_seconds']
+        win  = df[(df['timestamp_seconds'] >= ts - pre_buf) &
+                  (df['timestamp_seconds'] <= ts + post_buf)]
+        if win.empty:
+            continue
+
+        score = 0
+        tags  = set()
+
+        num_kills = len(win[win['type'] == 'kill'])
+        score += num_kills * weights['kill']
+        if num_kills > 1:
+            score += weights['multi_kill_bonus']
+            tags.add('multi-kill')
+
+        for _, ev in win[win['type'] == 'kill'].iterrows():
+            d = ev['details']
+            if d.get('isHeadshot'):
+                score += weights['headshot_bonus']
+                tags.add('headshot')
+            if d.get('throughSmoke'):
+                score += weights['smoke_kill_bonus']
+                tags.add('smoke_kill')
+
+        if any('rage' in s for s in win[win['type'] == 'chat']['details_str']):
+            score += weights['enemy_rage_chat']
+            tags.add('enemy_rage')
+        if any('hype' in s for s in win[win['type'] == 'voice']['details_str']):
+            score += weights['team_hype_voice']
+            tags.add('team_hype')
+        if not win[win['type'] == 'audio_spike'].empty:
+            score += weights['audio_spike']
+            tags.add('loud_reaction')
+
+        potential.append({
+            'source_video': video_path,
+            'clip_start':   ts - pre_buf,
+            'clip_end':     ts + post_buf,
+            'score':        score,
+            'tags':         list(tags),
+            'events_in_window': win.drop(columns=['details_str']).to_dict('records'),
+        })
+
+    if not potential:
+        return []
+
+    potential.sort(key=lambda x: x['clip_start'])
+    merged = [potential[0]]
+    for clip in potential[1:]:
+        last = merged[-1]
+        if clip['clip_start'] < last['clip_end']:
+            last['clip_end'] = max(last['clip_end'], clip['clip_end'])
+            last['score'] += clip['score']
+            last['tags']   = list(set(last['tags']) | set(clip['tags']))
+        else:
+            merged.append(clip)
+
+    return merged
+
+
 def run_correlation(config: dict):
     """Loads all events, finds clusters, scores them, and saves the final list of clips."""
     data_folder = config['data_folder']

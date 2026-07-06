@@ -255,11 +255,11 @@ class ResultsTab(QWidget):
                     return True
             
             # If still no match, show a message
-            self.clip_preview.video_display.setText("Clip file not found")
+            self.clip_preview.show_message("Clip file not found")
             return False
-            
+
         except Exception as e:
-            self.clip_preview.video_display.setText(f"Error loading clip: {str(e)}")
+            self.clip_preview.show_message(f"Error loading clip: {str(e)}")
             return False
         
     def export_selected(self):

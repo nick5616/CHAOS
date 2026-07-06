@@ -328,11 +328,40 @@ def analyze_audio(video_path: str, model, temp_dir: str) -> tuple[list, list]:
         if audio_path and os.path.exists(audio_path):
             os.remove(audio_path)
 
-def run_analysis(config: dict):
+# ---------------------------------------------------------------------------
+# Worker-process helpers for parallel analysis
+# ---------------------------------------------------------------------------
+
+_worker_ocr = None
+_worker_whisper = None
+
+
+def _init_analysis_worker(whisper_model_name: str) -> None:
+    """Runs once in each worker process to load models into module globals."""
+    global _worker_ocr, _worker_whisper
+    import easyocr as _easyocr
+    _worker_ocr = _easyocr.Reader(['en'], gpu=False)
+    _worker_whisper = whisper.load_model(whisper_model_name, device='cpu')
+
+
+def _analyze_video_worker(video_path: str, config: dict) -> list:
+    """Runs in a worker process. Uses module-level models loaded by the initializer."""
+    temp_dir = os.path.join(config['data_folder'], 'temp_audio')
+    kill_events = analyze_killfeed(video_path, config, _worker_ocr)
+    voice_events, spike_events = analyze_audio(video_path, _worker_whisper, temp_dir)
+    return kill_events + spike_events + voice_events
+
+
+# ---------------------------------------------------------------------------
+
+def run_analysis(config: dict, progress_callback=None):
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+
     data_folder = config['data_folder']
     manifest_path = os.path.join(data_folder, 'manifest.json')
     with open(manifest_path, 'r') as f:
         video_paths = json.load(f)
+
     if config.get('debug_mode', False):
         debug_folder = os.path.join(config['data_folder'], 'debug_screenshots')
         if os.path.exists(debug_folder):
@@ -343,45 +372,66 @@ def run_analysis(config: dict):
             return
         video_paths = video_paths[:1]
         print(f"DEBUG: Processing a single video: {video_paths[0]}")
+
     if not video_paths:
         print("No video paths to analyze.")
         return
-    print("Initializing AI Models (EasyOCR & Whisper)...")
-    import easyocr
-    
-    # Check if GPU should be used
-    use_gpu = config.get('use_gpu', False)
-    if use_gpu:
-        print("GPU acceleration enabled for AI models")
-    else:
-        print("Using CPU for AI models")
-    
-    # Platform-specific GPU handling
-    import platform
-    system = platform.system()
-    
-    if system == 'Darwin' and use_gpu:
-        # macOS: Force CPU usage to avoid MPS compatibility issues with EasyOCR
-        # EasyOCR has issues with torch.mps.current_device() in newer PyTorch versions
-        print("macOS detected: Using CPU to avoid MPS compatibility issues")
-        ocr_reader = easyocr.Reader(['en'], gpu=False)
-    else:
-        # Windows/Linux: Use GPU acceleration normally, or CPU if disabled
-        ocr_reader = easyocr.Reader(['en'], gpu=use_gpu)
-    whisper_model = whisper.load_model(config['whisper_model'], device='cuda' if use_gpu else 'cpu')
+
+    # Detect GPU at runtime
+    try:
+        import torch
+        use_gpu = torch.cuda.is_available()
+        if use_gpu:
+            print(f"GPU detected: {torch.cuda.get_device_name(0)}")
+    except ImportError:
+        use_gpu = False
+
+    # GPU is not safely shareable across processes — stay single-process.
+    # CPU: parallelise across workers (each spawns its own model instance).
+    max_workers = 1 if use_gpu else max(1, config.get('analysis_workers', min(4, os.cpu_count() or 1)))
+
+    n = len(video_paths)
     all_events = []
-    progress = tqdm(video_paths, desc="Analyzing Videos")
-    for video_path in progress:
-        base_name = os.path.basename(video_path)
-        progress.set_description(f"Analyzing {base_name[:30]}...")
-        kill_events = analyze_killfeed(video_path, config, ocr_reader)
-        # chat_events = analyze_chat(video_path, config, ocr_reader)
-        voice_events, spike_events = analyze_audio(video_path, whisper_model, os.path.join(data_folder, "temp_audio"))
-        all_events.extend(kill_events)
-        # all_events.extend(chat_events)
-        all_events.extend(spike_events)
-        all_events.extend(voice_events)
-    events_path = os.path.join(data_folder, "all_events.json")
+
+    if max_workers == 1:
+        print("Initializing AI Models (EasyOCR & Whisper)...")
+        import easyocr
+        import platform
+        system = platform.system()
+        if system == 'Darwin' and use_gpu:
+            print("macOS detected: Using CPU to avoid MPS compatibility issues")
+            ocr_reader = easyocr.Reader(['en'], gpu=False)
+        else:
+            ocr_reader = easyocr.Reader(['en'], gpu=use_gpu)
+        whisper_model = whisper.load_model(config['whisper_model'], device='cuda' if use_gpu else 'cpu')
+
+        for i, video_path in enumerate(video_paths):
+            print(f"Analyzing {os.path.basename(video_path)} ({i + 1}/{n})...")
+            kill_events = analyze_killfeed(video_path, config, ocr_reader)
+            voice_events, spike_events = analyze_audio(video_path, whisper_model, os.path.join(data_folder, 'temp_audio'))
+            all_events.extend(kill_events)
+            all_events.extend(spike_events)
+            all_events.extend(voice_events)
+            if progress_callback:
+                progress_callback('analyze', video_path, i + 1, n)
+    else:
+        print(f"Analyzing {n} videos across {max_workers} CPU worker processes...")
+        with ProcessPoolExecutor(
+            max_workers=max_workers,
+            initializer=_init_analysis_worker,
+            initargs=(config['whisper_model'],),
+        ) as pool:
+            futures = {pool.submit(_analyze_video_worker, path, config): path for path in video_paths}
+            completed = 0
+            for future in as_completed(futures):
+                video_path = futures[future]
+                all_events.extend(future.result())
+                completed += 1
+                print(f"  Finished {os.path.basename(video_path)} ({completed}/{n})")
+                if progress_callback:
+                    progress_callback('analyze', video_path, completed, n)
+
+    events_path = os.path.join(data_folder, 'all_events.json')
     with open(events_path, 'w') as f:
         json.dump(all_events, f, indent=2)
     print(f"\nAll events saved to {events_path}")

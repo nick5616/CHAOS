@@ -64,7 +64,7 @@ class ConfigManager:
             
             # Correlation & scoring
             "clip_pre_buffer_seconds": 7,
-            "clip_post_buffer_seconds": 8,
+            "clip_post_buffer_seconds": 6,
             "scoring_weights": {
                 "kill": 10,
                 "multi_kill_bonus": 15,
@@ -76,8 +76,9 @@ class ConfigManager:
             # GUI-specific settings
             "gui": {
                 "window_size": [1200, 800],
-                "theme": "default",
-                "auto_save": True
+                "theme": "cs2",
+                "auto_save": True,
+                "setup_complete": False
             },
             
             # System settings
@@ -104,6 +105,16 @@ class ConfigManager:
             }
         }
     
+    def _deep_merge(self, base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+        """Recursively merge override into base, returning a new dict."""
+        result = base.copy()
+        for key, value in override.items():
+            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                result[key] = self._deep_merge(result[key], value)
+            else:
+                result[key] = value
+        return result
+
     def load_config(self) -> Dict[str, Any]:
         """Load configuration from file.
         
@@ -122,11 +133,17 @@ class ConfigManager:
         try:
             with open(self.config_path, 'r', encoding='utf-8') as f:
                 config = yaml.safe_load(f) or {}
-            
-            # Merge with default config to ensure all keys exist
-            merged_config = self.default_config.copy()
-            merged_config.update(config)
-            
+
+            # Deep-merge with defaults so nested dicts (e.g. 'gui') get new keys
+            merged_config = self._deep_merge(self.default_config, config)
+
+            # Auto-mark setup complete for existing configs that already have
+            # a valid captures folder and player names (migration from pre-wizard versions).
+            if (not merged_config.get("gui", {}).get("setup_complete", False)
+                    and merged_config.get("captures_folder")
+                    and merged_config.get("player_names")):
+                merged_config.setdefault("gui", {})["setup_complete"] = True
+
             return merged_config
             
         except yaml.YAMLError as e:
@@ -157,19 +174,20 @@ class ConfigManager:
             print(f"Error saving config: {e}")
             return False
     
-    def validate_config(self, config: Dict[str, Any]) -> List[str]:
+    def validate_config(self, config: Dict[str, Any], skip_folder_check: bool = False) -> List[str]:
         """Validate configuration and return list of errors.
-        
+
         Args:
             config: Configuration dictionary to validate.
-            
+            skip_folder_check: Skip captures_folder check (use when file_list is provided).
+
         Returns:
             List of validation error messages.
         """
         errors = []
-        
+
         # Check required paths
-        if not config.get('captures_folder'):
+        if not skip_folder_check and not config.get('captures_folder'):
             errors.append("Captures folder is required")
         
         if not config.get('data_folder'):
@@ -207,6 +225,15 @@ class ConfigManager:
         
         return errors
     
+    def resolve_path(self, path: str) -> str:
+        """Resolve a config path (possibly relative) against the project root."""
+        if not path:
+            return path
+        p = Path(path)
+        if p.is_absolute():
+            return str(p)
+        return str((self.config_path.parent / path).resolve())
+
     def reset_to_defaults(self) -> Dict[str, Any]:
         """Reset configuration to defaults.
         

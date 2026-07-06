@@ -23,24 +23,25 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QIcon, QFont
 
 from desktop_app.gui.main_window import ChaosMainWindow
+from desktop_app.gui.utils.theme_manager import ThemeManager
 
 
 def main():
     """Main entry point for the desktop application."""
-    # Create the QApplication
     app = QApplication(sys.argv)
     app.setApplicationName("CHAOS")
     app.setApplicationVersion("1.0.0")
     app.setOrganizationName("CHAOS Team")
-    
-    # Set application style
+
     app.setStyle('Fusion')
-    
-    # Create and show the main window
+
+    # Apply CS2 theme before any window is created so dialogs inherit it
+    theme_manager = ThemeManager()
+    theme_manager.apply_theme('cs2')
+
     window = ChaosMainWindow()
     window.show()
-    
-    # Start the event loop
+
     sys.exit(app.exec())
 
 

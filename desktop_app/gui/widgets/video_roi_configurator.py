@@ -24,10 +24,9 @@ class VideoDisplayWidget(QLabel):
     def __init__(self):
         super().__init__()
         self.setMinimumSize(800, 450)
-        self.setStyleSheet("border: 1px solid gray; background-color: #f0f0f0;")
+        self.setStyleSheet("border: 1px solid gray; background-color: #1a1a1a;")
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setText("Load a video to configure ROI regions")
-        self.setScaledContents(True)
         
         # Dragging state
         self.dragging = False
@@ -66,9 +65,39 @@ class VideoDisplayWidget(QLabel):
         # Update display
         self.setPixmap(display_pixmap.scaled(self.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
         
+    def get_image_rect(self):
+        """Return the QRect of the rendered image inside the widget (accounts for letterboxing)."""
+        if self.current_pixmap is None:
+            return QRect(0, 0, self.width(), self.height())
+        fw, fh = self.current_pixmap.width(), self.current_pixmap.height()
+        ww, wh = self.width(), self.height()
+        if fw == 0 or fh == 0:
+            return QRect(0, 0, ww, wh)
+        if fw / fh > ww / wh:
+            rw, rh = ww, int(ww * fh / fw)
+        else:
+            rw, rh = int(wh * fw / fh), wh
+        return QRect((ww - rw) // 2, (wh - rh) // 2, rw, rh)
+
+    def widget_to_frame(self, pos):
+        """Convert a widget-space QPoint to video-frame pixel coordinates."""
+        if self.current_pixmap is None:
+            return pos.x(), pos.y()
+        rect = self.get_image_rect()
+        fw, fh = self.current_pixmap.width(), self.current_pixmap.height()
+        fx = int((pos.x() - rect.x()) * fw / rect.width())
+        fy = int((pos.y() - rect.y()) * fh / rect.height())
+        return max(0, min(fx, fw)), max(0, min(fy, fh))
+
     def draw_roi_overlay(self, painter, roi, label, color):
         """Draw ROI rectangle with label."""
         x1, y1, x2, y2 = roi
+        # Clamp to pixmap bounds so out-of-range config values still render partially
+        pw, ph = self.current_pixmap.width(), self.current_pixmap.height()
+        x1, x2 = max(0, min(x1, pw)), max(0, min(x2, pw))
+        y1, y2 = max(0, min(y1, ph)), max(0, min(y2, ph))
+        if x2 <= x1 or y2 <= y1:
+            return
         rect = QRect(x1, y1, x2 - x1, y2 - y1)
         
         # Draw semi-transparent rectangle
@@ -115,28 +144,20 @@ class VideoDisplayWidget(QLabel):
     def mouseMoveEvent(self, event):
         """Update ROI while dragging."""
         if self.dragging and self.current_roi_type and self.drag_start:
-            # Calculate ROI coordinates
-            x1 = min(self.drag_start.x(), event.pos().x())
-            y1 = min(self.drag_start.y(), event.pos().y())
-            x2 = max(self.drag_start.x(), event.pos().x())
-            y2 = max(self.drag_start.y(), event.pos().y())
-            
-            # Set ROI and emit signal
-            self.set_roi(self.current_roi_type, [x1, y1, x2, y2])
-            self.roi_dragged.emit(self.current_roi_type, [x1, y1, x2, y2])
-            
+            sx, sy = self.widget_to_frame(self.drag_start)
+            ex, ey = self.widget_to_frame(event.pos())
+            coords = [min(sx, ex), min(sy, ey), max(sx, ex), max(sy, ey)]
+            self.set_roi(self.current_roi_type, coords)
+            self.roi_dragged.emit(self.current_roi_type, coords)
+
     def mouseReleaseEvent(self, event):
         """Finish ROI dragging."""
         if self.dragging and self.current_roi_type and self.drag_start:
-            # Final ROI coordinates
-            x1 = min(self.drag_start.x(), event.pos().x())
-            y1 = min(self.drag_start.y(), event.pos().y())
-            x2 = max(self.drag_start.x(), event.pos().x())
-            y2 = max(self.drag_start.y(), event.pos().y())
-            
-            # Set final ROI
-            self.set_roi(self.current_roi_type, [x1, y1, x2, y2])
-            self.roi_dragged.emit(self.current_roi_type, [x1, y1, x2, y2])
+            sx, sy = self.widget_to_frame(self.drag_start)
+            ex, ey = self.widget_to_frame(event.pos())
+            coords = [min(sx, ex), min(sy, ey), max(sx, ex), max(sy, ey)]
+            self.set_roi(self.current_roi_type, coords)
+            self.roi_dragged.emit(self.current_roi_type, coords)
             
         self.dragging = False
         self.drag_start = None
@@ -465,4 +486,7 @@ class VideoROIConfigurator(QWidget):
     def extract_roi(self, frame, roi):
         """Extract ROI region from frame."""
         x1, y1, x2, y2 = roi
+        h, w = frame.shape[:2]
+        x1, x2 = max(0, min(x1, w)), max(0, min(x2, w))
+        y1, y2 = max(0, min(y1, h)), max(0, min(y2, h))
         return frame[y1:y2, x1:x2]
