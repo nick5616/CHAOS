@@ -5,6 +5,12 @@ The core pipeline runs as a true streaming pipeline:
   analyze → correlate → clip
 Each video moves to its next stage as soon as it finishes the current one —
 no video waits for other videos to finish before advancing.
+
+Fault tolerance: per-video state is persisted in data/video_events/:
+  {stem}.json    — analysis events saved after analyze completes
+  {stem}.clipped — marker written after all clips for that video are done
+On restart, already-clipped videos are counted silently; already-analyzed
+videos skip straight to correlate+clip.
 """
 
 import sys
@@ -37,10 +43,11 @@ class PipelineWorker(QThread):
     finished         = pyqtSignal(bool)
 
     # Per-job signals (used by the job-board widget)
-    job_started    = pyqtSignal(str, str)   # video_name, stage
-    job_updated    = pyqtSignal(str, str)   # video_name, new_stage
-    job_finished   = pyqtSignal(str, bool)  # video_name, success
-    pipeline_count = pyqtSignal(int, int)   # videos_done, total
+    job_started          = pyqtSignal(str, str)   # video_name, stage
+    job_updated          = pyqtSignal(str, str)   # video_name, new_stage
+    job_finished         = pyqtSignal(str, bool)  # video_name, success
+    pipeline_count       = pyqtSignal(int, int)   # videos_done, total
+    workers_count_changed = pyqtSignal(int)        # actual n_analyze after GPU check
     # --------------------------------------------------------------------
 
     def __init__(self, stages: List[str], config_path: str = None, file_list: List[str] = None):
@@ -53,6 +60,7 @@ class PipelineWorker(QThread):
         self.should_stop = False
         self._ocr = None
         self._whisper_model = None
+        self._target_workers: int = 4  # adjusted at runtime via set_target_workers
 
     # ------------------------------------------------------------------ run
 
@@ -64,6 +72,13 @@ class PipelineWorker(QThread):
                 self.error_occurred.emit("Failed to load configuration")
                 self.finished.emit(False)
                 return
+
+            # Normalize relative paths against project root so .clipped / .json
+            # cache files are written to (and read from) the same absolute location
+            # regardless of the CWD when the app is launched.
+            for _k in ('data_folder', 'final_clips_folder'):
+                if _k in config and not os.path.isabs(config[_k]):
+                    config[_k] = str((project_root / config[_k]).resolve())
 
             errors = self.config_manager.validate_config(
                 config, skip_folder_check=self.file_list is not None
@@ -133,6 +148,9 @@ class PipelineWorker(QThread):
         """
         Each video streams analyze → correlate → clip without waiting for
         other videos.  Returns (all_events, all_highlights).
+
+        Fault tolerance: on restart, videos with cached events skip analysis;
+        videos with a .clipped marker are counted immediately and skipped.
         """
         try:
             import torch
@@ -142,11 +160,14 @@ class PipelineWorker(QThread):
         except ImportError:
             use_gpu = False
 
+        _pipe = config.get('pipeline', {})
         n_analyze = (
             1 if use_gpu
-            else max(1, config.get('analysis_workers', min(4, os.cpu_count() or 1)))
+            else max(1, _pipe.get('analysis_workers',
+                                  config.get('analysis_workers', min(4, os.cpu_count() or 1))))
         )
-        n_clip = max(1, config.get('clip_workers', min(4, os.cpu_count() or 1)))
+        n_clip = max(1, _pipe.get('clip_workers',
+                                  config.get('clip_workers', min(4, os.cpu_count() or 1))))
 
         mode = "GPU (single worker)" if use_gpu else f"{n_analyze} CPU workers"
         self.log_message.emit(f"Analyze: {mode}  |  Clip: {n_clip} workers")
@@ -154,10 +175,13 @@ class PipelineWorker(QThread):
         ffmpeg = clipper._get_ffmpeg()
         out_folder = config['final_clips_folder']
 
+        video_events_dir = os.path.join(config['data_folder'], 'video_events')
+        os.makedirs(video_events_dir, exist_ok=True)
+
         all_events: list = []
         all_highlights: list = []
-        clip_futures: list = []          # (future, video_name)
-        pending_clips: dict = defaultdict(int)  # video_name → remaining clips
+        clip_futures: list = []
+        pending_clips: dict = defaultdict(int)
         clip_counter = [0]
         clip_lock = Lock()
         completed = [0]
@@ -165,75 +189,134 @@ class PipelineWorker(QThread):
 
         self.stage_started.emit("analyze")
 
+        # Partition by existing state
+        pre_clipped: list = []
+        pre_analyzed: dict = {}   # path → events
+        needs_analysis: list = []
+
+        for path in video_paths:
+            stem = os.path.splitext(os.path.basename(path))[0]
+            events_file  = os.path.join(video_events_dir, f"{stem}.json")
+            clipped_file = os.path.join(video_events_dir, f"{stem}.clipped")
+            if os.path.exists(clipped_file) and os.path.exists(events_file):
+                pre_clipped.append(path)
+            elif os.path.exists(events_file):
+                try:
+                    with open(events_file) as f:
+                        pre_analyzed[path] = json.load(f)
+                except Exception:
+                    needs_analysis.append(path)
+            else:
+                needs_analysis.append(path)
+
+        if pre_clipped:
+            self.log_message.emit(f"Skipping {len(pre_clipped)} already-finished videos")
+        if pre_analyzed:
+            self.log_message.emit(f"Resuming: {len(pre_analyzed)} videos skip analysis")
+        if needs_analysis:
+            self.log_message.emit(f"Analyzing: {len(needs_analysis)} videos")
+
+        # Pre-populate the job board with the full queue so users can see all videos
+        for path in list(pre_analyzed.keys()) + needs_analysis:
+            self.job_started.emit(os.path.basename(path), 'queued')
+
         with ThreadPoolExecutor(max_workers=n_clip) as clip_pool:
 
-            if n_analyze == 1:
-                self._load_inline_models(config, use_gpu)
-                for path in video_paths:
-                    if self.should_stop:
-                        break
-                    self._handle_video(
-                        path, config, use_gpu,
-                        all_events, all_highlights,
-                        clip_pool, clip_futures, clip_counter, clip_lock,
-                        pending_clips, completed, n_total, ffmpeg, out_folder,
-                    )
-            else:
-                with ProcessPoolExecutor(
-                    max_workers=n_analyze,
-                    initializer=analyzers._init_analysis_worker,
-                    initargs=(config['whisper_model'],),
-                ) as analyze_pool:
+            # Already-clipped videos: count silently, no UI card
+            if pre_clipped:
+                with clip_lock:
+                    completed[0] += len(pre_clipped)
+                self.pipeline_count.emit(completed[0], n_total)
 
-                    # Submit n_analyze videos initially, then refill as slots free
-                    pending_queue = list(video_paths)
-                    in_flight: dict = {}
+            # Pre-analyzed: cached events, go straight to correlate+clip
+            for path, events in pre_analyzed.items():
+                if self.should_stop:
+                    break
+                name = os.path.basename(path)
+                self.job_started.emit(name, 'correlate')
+                all_events.extend(events)
+                self._after_analyze(
+                    path, name, events, config,
+                    all_highlights,
+                    clip_pool, clip_futures, clip_counter, clip_lock,
+                    pending_clips, completed, n_total, ffmpeg, out_folder,
+                    video_events_dir,
+                )
 
-                    def _submit_next():
-                        if pending_queue and not self.should_stop:
-                            path = pending_queue.pop(0)
-                            name = os.path.basename(path)
-                            self.job_started.emit(name, 'analyze')
-                            f = analyze_pool.submit(analyzers._analyze_video_worker, path, config)
-                            in_flight[f] = path
+            if not self.should_stop and needs_analysis:
+                if n_analyze == 1:
+                    self._load_inline_models(config, use_gpu)
+                    for path in needs_analysis:
+                        if self.should_stop:
+                            break
+                        self._handle_video(
+                            path, config, use_gpu,
+                            all_events, all_highlights,
+                            clip_pool, clip_futures, clip_counter, clip_lock,
+                            pending_clips, completed, n_total, ffmpeg, out_folder,
+                            video_events_dir,
+                        )
+                else:
+                    # Pool ceiling: workers beyond n_analyze are idle until user
+                    # increments the stepper, then tasks start immediately.
+                    _pool_cap = min(os.cpu_count() or 4, 8)
+                    with ProcessPoolExecutor(
+                        max_workers=_pool_cap,
+                        initializer=analyzers._init_analysis_worker,
+                        initargs=(config['whisper_model'],),
+                    ) as analyze_pool:
 
-                    for _ in range(min(n_analyze, len(pending_queue))):
-                        _submit_next()
+                        pending_queue = list(needs_analysis)
+                        in_flight: dict = {}
 
-                    while in_flight:
-                        done_set, _ = wait(set(in_flight), return_when=FIRST_COMPLETED)
-                        for future in done_set:
-                            path = in_flight.pop(future)
-                            name = os.path.basename(path)
-                            try:
-                                events = future.result()
-                            except Exception as e:
-                                self.log_message.emit(f"Analyze failed {name}: {e}")
-                                self.job_finished.emit(name, False)
+                        def _submit_next():
+                            if pending_queue and not self.should_stop:
+                                path = pending_queue.pop(0)
+                                name = os.path.basename(path)
+                                self.job_started.emit(name, 'analyze')
+                                f = analyze_pool.submit(analyzers._analyze_video_worker, path, config)
+                                in_flight[f] = path
+
+                        self._target_workers = n_analyze
+                        self.workers_count_changed.emit(n_analyze)
+
+                        def _maybe_submit():
+                            while (len(in_flight) < self._target_workers
+                                   and pending_queue
+                                   and not self.should_stop):
                                 _submit_next()
-                                continue
 
-                            self._after_analyze(
-                                path, name, events, config,
-                                all_events, all_highlights,
-                                clip_pool, clip_futures, clip_counter, clip_lock,
-                                pending_clips, completed, n_total, ffmpeg, out_folder,
-                            )
-                            _submit_next()
+                        _maybe_submit()
 
-            # Wait for all clip jobs, emitting finished once a video's clips are done
-            future_to_name = {f: name for f, name in clip_futures}
-            for future in as_completed(future_to_name):
-                name = future_to_name[future]
-                try:
-                    future.result()
-                except Exception as e:
-                    self.log_message.emit(f"Clip error ({name}): {e}")
-                pending_clips[name] -= 1
-                if pending_clips[name] == 0:
-                    completed[0] += 1
-                    self.job_finished.emit(name, True)
-                    self.pipeline_count.emit(completed[0], n_total)
+                        while in_flight:
+                            # Short timeout so a + press takes effect in ≤100 ms
+                            done_set, _ = wait(set(in_flight), return_when=FIRST_COMPLETED,
+                                               timeout=0.1)
+                            _maybe_submit()  # picks up any target increase immediately
+                            for future in done_set:
+                                path = in_flight.pop(future)
+                                name = os.path.basename(path)
+                                try:
+                                    events = future.result()
+                                except Exception as e:
+                                    self.log_message.emit(f"Analyze failed {name}: {e}")
+                                    self.job_finished.emit(name, False)
+                                    _maybe_submit()
+                                    continue
+
+                                all_events.extend(events)
+                                self._after_analyze(
+                                    path, name, events, config,
+                                    all_highlights,
+                                    clip_pool, clip_futures, clip_counter, clip_lock,
+                                    pending_clips, completed, n_total, ffmpeg, out_folder,
+                                    video_events_dir,
+                                )
+                                _maybe_submit()
+
+            # Wait for all clip futures — callbacks handle job_finished/pipeline_count
+            if clip_futures:
+                wait([f for f, _ in clip_futures])
 
         # Emit stage markers so the log viewer still sees them
         self.stage_completed.emit("analyze", True)
@@ -263,7 +346,8 @@ class PipelineWorker(QThread):
     def _handle_video(self, path, config, use_gpu,
                       all_events, all_highlights,
                       clip_pool, clip_futures, clip_counter, clip_lock,
-                      pending_clips, completed, n_total, ffmpeg, out_folder):
+                      pending_clips, completed, n_total, ffmpeg, out_folder,
+                      video_events_dir=None):
         """Sequential path: analyze inline then hand off."""
         name = os.path.basename(path)
         self.job_started.emit(name, 'analyze')
@@ -277,19 +361,30 @@ class PipelineWorker(QThread):
             self.job_finished.emit(name, False)
             return
 
+        all_events.extend(events)
         self._after_analyze(
             path, name, events, config,
-            all_events, all_highlights,
+            all_highlights,
             clip_pool, clip_futures, clip_counter, clip_lock,
             pending_clips, completed, n_total, ffmpeg, out_folder,
+            video_events_dir,
         )
 
     def _after_analyze(self, path, name, events, config,
-                       all_events, all_highlights,
+                       all_highlights,
                        clip_pool, clip_futures, clip_counter, clip_lock,
-                       pending_clips, completed, n_total, ffmpeg, out_folder):
-        """Correlate + submit clips immediately after a video finishes analysis."""
-        all_events.extend(events)
+                       pending_clips, completed, n_total, ffmpeg, out_folder,
+                       video_events_dir=None):
+        """Persist events, correlate, and submit clips immediately after analysis."""
+        stem = os.path.splitext(name)[0]
+
+        # Persist events so we can resume if interrupted
+        if video_events_dir:
+            try:
+                with open(os.path.join(video_events_dir, f"{stem}.json"), 'w') as f:
+                    json.dump(events, f)
+            except Exception:
+                pass
 
         self.job_updated.emit(name, 'correlate')
         highlights = correlator.correlate_video_events(path, events, config)
@@ -297,9 +392,17 @@ class PipelineWorker(QThread):
         self.log_message.emit(f"{name}: {len(highlights)} clip(s) found")
 
         if not highlights:
-            completed[0] += 1
+            with clip_lock:
+                completed[0] += 1
+                cnt = completed[0]
+            # No clips to make — mark as fully done
+            if video_events_dir:
+                try:
+                    open(os.path.join(video_events_dir, f"{stem}.clipped"), 'w').close()
+                except Exception:
+                    pass
             self.job_finished.emit(name, True)
-            self.pipeline_count.emit(completed[0], n_total)
+            self.pipeline_count.emit(cnt, n_total)
             return
 
         self.job_updated.emit(name, 'clip')
@@ -309,9 +412,41 @@ class PipelineWorker(QThread):
                 idx = clip_counter[0]
                 clip_counter[0] += 1
             f = clip_pool.submit(clipper._clip_one, idx, h, out_folder, ffmpeg)
+            f.add_done_callback(
+                self._make_clip_callback(name, stem, video_events_dir, pending_clips, completed, clip_lock, n_total)
+            )
             clip_futures.append((f, name))
 
+    def _make_clip_callback(self, name, stem, video_events_dir, pending_clips, completed, clip_lock, n_total):
+        def _callback(future):
+            try:
+                future.result()
+            except Exception as e:
+                self.log_message.emit(f"Clip error ({name}): {e}")
+            emit_done = False
+            emit_cnt = 0
+            with clip_lock:
+                pending_clips[name] -= 1
+                if pending_clips[name] == 0:
+                    completed[0] += 1
+                    emit_done = True
+                    emit_cnt = completed[0]
+                    if video_events_dir:
+                        try:
+                            open(os.path.join(video_events_dir, f"{stem}.clipped"), 'w').close()
+                        except Exception:
+                            pass
+            if emit_done:
+                self.job_finished.emit(name, True)
+                self.pipeline_count.emit(emit_cnt, n_total)
+        return _callback
+
     # ------------------------------------------------------------------ control
+
+    def set_target_workers(self, n: int) -> None:
+        """Adjust analysis concurrency live. Excess in-flight jobs finish naturally."""
+        self._target_workers = max(1, n)
+        self.log_message.emit(f"Analysis workers → {self._target_workers}")
 
     def pause(self):
         self.is_paused = True

@@ -53,6 +53,34 @@ def _make_thumbnail(path: str, w: int = 160, h: int = 90) -> QIcon:
         return QIcon()
 
 
+# ------------------------------------------------------------------ thumbnail worker
+
+class _ThumbnailLoaderWorker(QThread):
+    """Load thumbnails for a list of video paths in a background thread."""
+    thumbnail_ready = pyqtSignal(str, QIcon)   # path, icon
+
+    def __init__(self, paths: list, cache: dict, w: int = 160, h: int = 90):
+        super().__init__()
+        self._paths  = paths
+        self._cache  = cache
+        self._w, self._h = w, h
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        self._cancelled = True
+
+    def run(self) -> None:
+        for path in self._paths:
+            if self._cancelled:
+                break
+            if path in self._cache:
+                self.thumbnail_ready.emit(path, self._cache[path])
+                continue
+            icon = _make_thumbnail(path, self._w, self._h)
+            self._cache[path] = icon
+            self.thumbnail_ready.emit(path, icon)
+
+
 # ------------------------------------------------------------------ delegate
 
 class ClipCardDelegate(QStyledItemDelegate):
@@ -208,6 +236,9 @@ class WatchView(QWidget):
         self._playing_sequence = False
         self._updating_timeline = False
         self._export_worker = None
+        self._thumb_cache: dict = {}
+        self._thumb_worker: _ThumbnailLoaderWorker | None = None
+        self._dirty = True          # reload on first switch; set again after pipeline runs
         self._build_ui()
 
     # ------------------------------------------------------------------ build
@@ -305,7 +336,14 @@ class WatchView(QWidget):
 
     # ------------------------------------------------------------------ load
 
+    def mark_dirty(self) -> None:
+        """Call after pipeline finishes so next switch reloads clips."""
+        self._dirty = True
+
     def load_clips(self):
+        if not self._dirty:
+            return
+        self._dirty = False
         try:
             config = self.config_manager.load_config()
             clips_folder = self.config_manager.resolve_path(
@@ -351,13 +389,19 @@ class WatchView(QWidget):
             self._clip_label.setText(f"Error loading clips: {e}")
 
     def _populate_timeline(self, entries: list):
+        # Cancel any in-progress thumbnail worker
+        if self._thumb_worker and self._thumb_worker.isRunning():
+            self._thumb_worker.cancel()
+            self._thumb_worker.wait()
+
         self._updating_timeline = True
         self._timeline.clear()
         self._updating_timeline = False
         self._current_index = -1
 
+        # Add items immediately with cached icons (empty placeholder for uncached)
         for entry in entries:
-            icon = _make_thumbnail(entry["path"])
+            icon = self._thumb_cache.get(entry["path"], QIcon())
             item = QListWidgetItem(icon, entry["label"])
             item.setData(Qt.ItemDataRole.UserRole, entry["path"])
             item.setData(PROGRESS_ROLE, 0.0)
@@ -368,8 +412,21 @@ class WatchView(QWidget):
         if count:
             self._clip_label.setText(f"{count} clip{'s' if count != 1 else ''}")
             self._select_clip(0)
+
+            # Load thumbnails in background; already-cached ones emit immediately
+            paths = [e["path"] for e in entries]
+            self._thumb_worker = _ThumbnailLoaderWorker(paths, self._thumb_cache)
+            self._thumb_worker.thumbnail_ready.connect(self._on_thumbnail_ready)
+            self._thumb_worker.start()
         else:
             self._clip_label.setText("No clips found — run the pipeline first")
+
+    def _on_thumbnail_ready(self, path: str, icon: QIcon) -> None:
+        for i in range(self._timeline.count()):
+            item = self._timeline.item(i)
+            if item.data(Qt.ItemDataRole.UserRole) == path:
+                item.setIcon(icon)
+                break
 
     def _select_clip(self, index: int):
         if not (0 <= index < self._timeline.count()):

@@ -1,5 +1,5 @@
 """
-Home view — file source selector, player names, run button, and progress.
+Clip source view (folder/file picker + player names) and run view (pipeline + log).
 """
 
 import os
@@ -45,12 +45,12 @@ def _folder_video_paths(path: str) -> list[str]:
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QLineEdit, QTextEdit, QProgressBar, QFileDialog, QGroupBox,
+    QLineEdit, QFileDialog,
     QRadioButton, QButtonGroup, QListWidget, QListWidgetItem,
     QStackedWidget, QFrame, QSizePolicy, QScrollArea, QGridLayout,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QThread
-from PyQt6.QtGui import QFont, QPixmap, QImage
+from PyQt6.QtGui import QPixmap, QImage
 
 from desktop_app.gui.widgets.log_viewer import LogViewer
 from desktop_app.gui.widgets.animated_pipeline import AnimatedPipelineWidget
@@ -159,7 +159,6 @@ class ClipThumbnailGrid(QWidget):
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._scroll.setFixedHeight(280)
         self._scroll.setStyleSheet("QScrollArea { border: 1px solid #2a2d35; border-radius: 4px; }")
 
         self._inner = QWidget()
@@ -203,32 +202,35 @@ class ClipThumbnailGrid(QWidget):
             self._cards[path].set_thumbnail(img)
 
 
-class HomeView(QWidget):
-    """Main home screen: pick source, set names, run the pipeline."""
-
-    pipeline_finished = pyqtSignal(bool, int)  # success, input_bytes
+class ClipSourceView(QWidget):
+    """Clip source selector: folder/file picker and player names."""
 
     def __init__(self, config_manager: ConfigManager):
         super().__init__()
         self.config_manager = config_manager
-        self._worker = None
-        self._input_size_bytes = 0
         self._build_ui()
         self.reload_config()
 
     # ------------------------------------------------------------------ build
 
     def _build_ui(self):
-        root = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+
+        content = QWidget()
+        root = QVBoxLayout(content)
         root.setContentsMargins(24, 20, 24, 16)
         root.setSpacing(16)
 
-        # ---- Source + names section ----
-        source_box = QGroupBox("Clips source")
-        source_layout = QVBoxLayout(source_box)
-        source_layout.setSpacing(10)
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
 
-        # Mode toggle
         mode_row = QHBoxLayout()
         self._mode_group = QButtonGroup(self)
         self._folder_radio = QRadioButton("Folder")
@@ -239,101 +241,31 @@ class HomeView(QWidget):
         mode_row.addWidget(self._folder_radio)
         mode_row.addWidget(self._files_radio)
         mode_row.addStretch()
-        source_layout.addLayout(mode_row)
+        root.addLayout(mode_row)
 
         self._folder_radio.toggled.connect(lambda checked: self._source_stack.setCurrentIndex(0) if checked else None)
         self._files_radio.toggled.connect(lambda checked: self._source_stack.setCurrentIndex(1) if checked else None)
 
-        # Source stack: folder panel / files panel
         self._source_stack = QStackedWidget()
         self._source_stack.addWidget(self._build_folder_panel())
         self._source_stack.addWidget(self._build_files_panel())
-        source_layout.addWidget(self._source_stack)
+        root.addWidget(self._source_stack, 1)  # fills available height
 
-        # Player names (shared, always visible)
         names_row = QHBoxLayout()
         names_lbl = QLabel("Your in-game name(s):")
         names_lbl.setFixedWidth(160)
         names_row.addWidget(names_lbl)
         self._names_edit = QLineEdit()
-        self._names_edit.setPlaceholderText("nickb, altName, smurf  (comma-separated)")
+        self._names_edit.setPlaceholderText("donk666, altName, smurf  (comma-separated)")
         self._names_edit.textChanged.connect(self._on_names_changed)
         names_row.addWidget(self._names_edit)
-        source_layout.addLayout(names_row)
-
-        root.addWidget(source_box)
-
-        # ---- Run controls ----
-        run_frame = QFrame()
-        run_frame.setStyleSheet("QFrame { background-color: #12151a; border-radius: 6px; border: 1px solid #2a2d35; }")
-        run_layout = QVBoxLayout(run_frame)
-        run_layout.setContentsMargins(24, 20, 24, 20)
-        run_layout.setSpacing(12)
-        run_layout.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-
-        self._run_btn = QPushButton("FIND HIGHLIGHTS")
-        self._run_btn.setObjectName("runButton")
-        self._run_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        self._run_btn.clicked.connect(self._start_pipeline)
-        run_layout.addWidget(self._run_btn, alignment=Qt.AlignmentFlag.AlignHCenter)
-
-        self._validation_label = QLabel("")
-        self._validation_label.setStyleSheet("color: #f87171; font-size: 12px;")
-        self._validation_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        run_layout.addWidget(self._validation_label)
-
-        # Progress (hidden until running)
-        self._pipeline_widget = AnimatedPipelineWidget()
-        self._pipeline_widget.setVisible(False)
-        run_layout.addWidget(self._pipeline_widget)
-
-        self._status_lbl = QLabel("")
-        self._status_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        self._status_lbl.setStyleSheet("color: #6b7280; font-size: 12px;")
-        self._status_lbl.setVisible(False)
-        run_layout.addWidget(self._status_lbl)
-
-        # Pause / Stop row (hidden until running)
-        ctrl_row = QHBoxLayout()
-        ctrl_row.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        self._pause_btn = QPushButton("Pause")
-        self._pause_btn.setEnabled(False)
-        self._pause_btn.clicked.connect(self._toggle_pause)
-        self._stop_btn = QPushButton("Stop")
-        self._stop_btn.setEnabled(False)
-        self._stop_btn.clicked.connect(self._stop_pipeline)
-        ctrl_row.addWidget(self._pause_btn)
-        ctrl_row.addWidget(self._stop_btn)
-        self._ctrl_frame = QWidget()
-        self._ctrl_frame.setLayout(ctrl_row)
-        self._ctrl_frame.setVisible(False)
-        run_layout.addWidget(self._ctrl_frame)
-
-        root.addWidget(run_frame)
-
-        # ---- Expandable log ----
-        self._log_toggle_btn = QPushButton("Show log  ▼")
-        self._log_toggle_btn.setObjectName("")  # reset objectName so it gets default button style
-        self._log_toggle_btn.setStyleSheet(
-            "QPushButton { background: transparent; border: none; color: #6b7280; font-size: 12px; text-align: left; }"
-            "QPushButton:hover { color: #c8ccd4; }"
-        )
-        self._log_toggle_btn.clicked.connect(self._toggle_log)
-        root.addWidget(self._log_toggle_btn)
-
-        self._log_viewer = LogViewer()
-        self._log_viewer.setVisible(False)
-        self._log_viewer.setMinimumHeight(120)
-        self._log_viewer.setMaximumHeight(200)
-        root.addWidget(self._log_viewer)
-
-        root.addStretch()
+        root.addLayout(names_row)
 
     def _build_folder_panel(self):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
+        layout.setSpacing(6)
 
         row = QHBoxLayout()
         self._folder_edit = QLineEdit()
@@ -351,7 +283,7 @@ class HomeView(QWidget):
         layout.addWidget(self._folder_size_lbl)
 
         self._thumb_grid = ClipThumbnailGrid()
-        layout.addWidget(self._thumb_grid)
+        layout.addWidget(self._thumb_grid, 1)
 
         return panel
 
@@ -378,22 +310,39 @@ class HomeView(QWidget):
         layout.addLayout(btn_row)
 
         self._files_list = QListWidget()
-        self._files_list.setMaximumHeight(100)
-        layout.addWidget(self._files_list)
+        layout.addWidget(self._files_list, 1)
         return panel
+
+    # ------------------------------------------------------------------ public getters (for RunView)
+
+    def get_file_list(self) -> "list[str] | None":
+        """Returns list of selected files in files mode, None in folder mode."""
+        if self._files_radio.isChecked():
+            return [
+                self._files_list.item(i).data(Qt.ItemDataRole.UserRole)
+                for i in range(self._files_list.count())
+            ]
+        return None
+
+    def get_folder(self) -> str:
+        return self._folder_edit.text().strip()
+
+    def get_names(self) -> list[str]:
+        return [n.strip() for n in self._names_edit.text().split(",") if n.strip()]
+
+    def is_files_mode(self) -> bool:
+        return self._files_radio.isChecked()
 
     # ------------------------------------------------------------------ config
 
     def reload_config(self):
         config = self.config_manager.load_config()
 
-        # Restore folder
         folder = config.get("captures_folder", "")
         self._folder_edit.setText(folder)
         if folder and os.path.isdir(folder):
             self._update_folder_info(folder)
 
-        # Restore player names
         names = config.get("player_names", [])
         if isinstance(names, list):
             self._names_edit.setText(", ".join(names))
@@ -464,31 +413,103 @@ class HomeView(QWidget):
     def _on_names_changed(self, _text: str):
         self._save_names_to_config()
 
-    def _toggle_log(self):
-        visible = not self._log_viewer.isVisible()
-        self._log_viewer.setVisible(visible)
-        self._log_toggle_btn.setText("Hide log  ▲" if visible else "Show log  ▼")
+
+class RunView(QWidget):
+    """Run controls, pipeline progress, and log."""
+
+    pipeline_finished = pyqtSignal(bool, int)  # success, input_bytes
+
+    def __init__(self, clip_source: ClipSourceView, config_manager: ConfigManager):
+        super().__init__()
+        self._source = clip_source
+        self.config_manager = config_manager
+        self._worker = None
+        self._input_size_bytes = 0
+        self._build_ui()
+
+    # ------------------------------------------------------------------ build
+
+    def _build_ui(self):
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+
+        content = QWidget()
+        root = QVBoxLayout(content)
+        root.setContentsMargins(24, 20, 24, 16)
+        root.setSpacing(16)
+
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
+
+        run_frame = QFrame()
+        run_frame.setStyleSheet("QFrame { background-color: #12151a; border-radius: 6px; border: 1px solid #2a2d35; }")
+        run_layout = QVBoxLayout(run_frame)
+        run_layout.setContentsMargins(16, 14, 16, 14)
+        run_layout.setSpacing(10)
+
+        self._run_btn = QPushButton("FIND HIGHLIGHTS")
+        self._run_btn.setObjectName("runButton")
+        self._run_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self._run_btn.clicked.connect(self._start_pipeline)
+        run_layout.addWidget(self._run_btn, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        self._validation_label = QLabel("")
+        self._validation_label.setStyleSheet("color: #f87171; font-size: 12px;")
+        self._validation_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        run_layout.addWidget(self._validation_label)
+
+        self._pipeline_widget = AnimatedPipelineWidget()
+        self._pipeline_widget.setVisible(False)
+        run_layout.addWidget(self._pipeline_widget)
+
+        ctrl_row = QHBoxLayout()
+        ctrl_row.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        self._pause_btn = QPushButton("Pause")
+        self._pause_btn.setEnabled(False)
+        self._pause_btn.clicked.connect(self._toggle_pause)
+        self._stop_btn = QPushButton("Stop")
+        self._stop_btn.setEnabled(False)
+        self._stop_btn.clicked.connect(self._stop_pipeline)
+        ctrl_row.addWidget(self._pause_btn)
+        ctrl_row.addWidget(self._stop_btn)
+        self._ctrl_frame = QWidget()
+        self._ctrl_frame.setLayout(ctrl_row)
+        self._ctrl_frame.setVisible(False)
+        run_layout.addWidget(self._ctrl_frame)
+
+        root.addWidget(run_frame)
+
+        self._log_toggle_btn = QPushButton("Show log  ▼")
+        self._log_toggle_btn.setStyleSheet(
+            "QPushButton { background: transparent; border: none; color: #6b7280; font-size: 12px; text-align: left; }"
+            "QPushButton:hover { color: #c8ccd4; }"
+        )
+        self._log_toggle_btn.clicked.connect(self._toggle_log)
+        root.addWidget(self._log_toggle_btn)
+
+        self._log_viewer = LogViewer()
+        self._log_viewer.setVisible(False)
+        self._log_viewer.setMinimumHeight(120)
+        self._log_viewer.setMaximumHeight(200)
+        root.addWidget(self._log_viewer)
+        root.addStretch()
 
     # ------------------------------------------------------------------ run
 
-    def _get_file_list(self):
-        if self._files_radio.isChecked():
-            return [
-                self._files_list.item(i).data(Qt.ItemDataRole.UserRole)
-                for i in range(self._files_list.count())
-            ]
-        return None
-
     def _validate(self) -> str:
-        if self._files_radio.isChecked():
-            if self._files_list.count() == 0:
+        if self._source.is_files_mode():
+            if not self._source.get_file_list():
                 return "Add at least one video file."
         else:
-            if not self._folder_edit.text().strip():
+            if not self._source.get_folder():
                 return "Select a folder containing your CS2 clips."
-
-        names = [n.strip() for n in self._names_edit.text().split(",") if n.strip()]
-        if not names:
+        if not self._source.get_names():
             return "Enter at least one in-game name."
         return ""
 
@@ -499,13 +520,13 @@ class HomeView(QWidget):
             return
         self._validation_label.setText("")
 
-        file_list = self._get_file_list()
+        file_list = self._source.get_file_list()
 
         if file_list:
             self._input_size_bytes = sum(os.path.getsize(p) for p in file_list if os.path.exists(p))
             video_count = len(file_list)
         else:
-            folder = self._folder_edit.text().strip()
+            folder = self._source.get_folder()
             self._input_size_bytes, video_count = _folder_video_size(folder)
 
         self._worker = PipelineWorker(stages=ALL_STAGES, file_list=file_list)
@@ -528,6 +549,15 @@ class HomeView(QWidget):
         self._worker.error_occurred.connect(lambda e: self._log_viewer.add_message(e, "error"))
         self._worker.finished.connect(self._on_pipeline_done)
 
+        # Seed stepper from config; worker will push the real value once it
+        # knows whether GPU is available (workers_count_changed signal).
+        _cfg = self.config_manager.load_config()
+        _nw  = _cfg.get('pipeline', {}).get('analysis_workers',
+                         _cfg.get('analysis_workers', 2))
+        self._pipeline_widget.set_worker_target(_nw)
+        self._worker.workers_count_changed.connect(self._pipeline_widget.set_worker_target)
+        self._pipeline_widget.workers_changed.connect(self._worker.set_target_workers)
+
         self._set_running(True)
         self._log_viewer.clear_log()
         if not self._log_viewer.isVisible():
@@ -548,27 +578,22 @@ class HomeView(QWidget):
         if self._worker:
             self._worker.stop()
 
-    def _on_progress(self, pct: int, msg: str):
-        self._status_lbl.setText(msg)
-
     def _on_pipeline_done(self, success: bool):
         self._set_running(False)
-        if success:
-            self._status_lbl.setText("Done — highlights ready")
-            self._status_lbl.setStyleSheet("color: #4ade80; font-size: 12px;")
-        else:
-            self._status_lbl.setText("Pipeline finished with errors")
-            self._status_lbl.setStyleSheet("color: #f87171; font-size: 12px;")
         self.pipeline_finished.emit(success, self._input_size_bytes)
 
     def _set_running(self, running: bool):
-        self._run_btn.setEnabled(not running)
+        self._run_btn.setVisible(not running)
         self._pipeline_widget.setVisible(running)
-        self._status_lbl.setVisible(True)
         self._ctrl_frame.setVisible(running)
         self._pause_btn.setEnabled(running)
         self._pause_btn.setText("Pause")
         self._stop_btn.setEnabled(running)
-        if running:
-            self._status_lbl.setText("Starting pipeline…")
-            self._status_lbl.setStyleSheet("color: #6b7280; font-size: 12px;")
+
+    def _on_progress(self, pct: int, msg: str) -> None:
+        pass  # AnimatedPipelineWidget handles visual progress; pct unused here
+
+    def _toggle_log(self):
+        visible = not self._log_viewer.isVisible()
+        self._log_viewer.setVisible(visible)
+        self._log_toggle_btn.setText("Hide log  ▲" if visible else "Show log  ▼")

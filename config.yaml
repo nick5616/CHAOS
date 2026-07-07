@@ -1,4 +1,4 @@
-captures_folder: D:/Captures/good clips
+captures_folder: D:/Captures/Counter-strike 2
 data_folder: ./data
 final_clips_folder: ./final_clips
 player_names:
@@ -68,8 +68,8 @@ scoring_weights:
   smoke_kill_bonus: 40
 gui:
   window_size:
-  - 1050
-  - 1253
+  - 998
+  - 778
   theme: cs2
   auto_save: true
   setup_complete: true

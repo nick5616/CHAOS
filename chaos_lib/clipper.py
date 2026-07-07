@@ -41,6 +41,9 @@ def _clip_one(i: int, clip_data: dict, output_folder: str, ffmpeg_path: str) -> 
         output_filename = f"{i + 1}_{score}_{base_name[:20]}.mp4"
     output_path = os.path.join(output_folder, output_filename)
 
+    if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+        return
+
     subprocess.run(
         [ffmpeg_path, '-y', '-ss', str(start_time), '-i', source_video,
          '-t', str(duration), '-c', 'copy', output_path],

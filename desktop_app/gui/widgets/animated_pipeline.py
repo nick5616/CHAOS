@@ -1,77 +1,53 @@
 """
 Live job-board pipeline widget.
 
-Each row shows a video filename and a three-stage pipeline flow:
-    [ANALYZE] ──▶── [CORRELATE] ──▶── [CLIP]
+Each card shows:
+  - Video filename (middle-elided)
+  - A single full-width processing bar:
+      active  = sweeping shimmer wave
+      queued  = dim outline + "QUEUED"
+      done    = green fill that fades out
+      failed  = red fill that fades out
 
-Done stages are dimmed with a ✓; the active stage is bright with a shimmer;
-pending stages are ghosted outlines.  A concurrency summary below the
-progress bar shows how many videos are at each stage right now.
+Header:
+  - Thin progress bar; "N / M" right-aligned on the summary line below it
+  - "N processing" concurrency summary on the left
+
+Cards sort: active first, then fading (in-place until gone), then queued.
+Mouse-wheel scrolls; slim scrollbar tracks position.
 """
 
-from collections import Counter
-
 from PyQt6.QtWidgets import QWidget
-from PyQt6.QtCore import Qt, QTimer, QRectF
+from PyQt6.QtCore import Qt, QTimer, QRectF, pyqtSignal
 from PyQt6.QtGui import (
     QPainter, QPen, QBrush, QColor, QFont,
     QPainterPath, QLinearGradient,
 )
 
-# ---- stage definitions ---------------------------------------------------
-_PIPELINE   = ["analyze", "correlate", "clip"]
+# Stages that count as "actively processing"
+_ACTIVE_STAGES = {"analyze", "correlate", "clip", "processing"}
 
-_STAGE_COLOR = {
-    "analyze":   QColor("#3B82F6"),
-    "correlate": QColor("#8B5CF6"),
-    "clip":      QColor("#F97316"),
-    "done":      QColor("#22C55E"),
-    "failed":    QColor("#EF4444"),
-    "ingest":    QColor("#6B7280"),
-    "summary":   QColor("#6B7280"),
-}
-_STAGE_LABEL = {
-    "analyze":   "ANALYZE",
-    "correlate": "CORRELATE",
-    "clip":      "CLIP",
-    "done":      "DONE",
-    "failed":    "FAILED",
-    "ingest":    "INGEST",
-    "summary":   "SUMMARY",
-}
-# pill widths for each pipeline stage
-_STAGE_PW = {
-    "analyze":   68,
-    "correlate": 76,
-    "clip":      48,
-}
-_ARROW_W   = 18   # width of ──▶── connector between pills
-_PIPE_H    = 22   # height of the 3-pill pipeline row inside each card
-_PILL_H    = 20
-_PILL_R    = 4
+# ---- palette
+_COLOR_ACTIVE = QColor("#F97316")
+_COLOR_DONE   = QColor("#22C55E")
+_COLOR_FAILED = QColor("#EF4444")
 
-_STAGE_SHIMMER = {
-    "analyze":   0.006,
-    "correlate": 0.022,
-    "clip":      0.013,
-}
+# ---- layout
+_PAD_X        = 14
+_PAD_Y        = 10
+_BAR_H        = 8
+_HEADER_BAR_H = _PAD_Y + _BAR_H + 6
+_HEADER_SUM_H = 20
+_HEADER_H     = _HEADER_BAR_H + _HEADER_SUM_H + _PAD_Y
 
-# ---- layout --------------------------------------------------------------
-_PAD_X     = 14
-_PAD_Y     = 10
-_BAR_H     = 6
-_ROW_H     = 54          # card height (filename + pipeline row)
-_ROW_STEP  = _ROW_H + 6
-_MAX_VIS   = 5
-_FADE_STEP = 0.04
-_SCROLL_SPD = _ROW_STEP
+_ROW_H       = 52
+_NAME_H      = 26
+_PROC_H      = 16
+_ROW_STEP    = _ROW_H + 4
+_MAX_VIS     = 6
+_FADE_STEP   = 0.032
+_SHIMMER_SPD = 0.014
 
-_BAR_SECTION  = _PAD_Y + _BAR_H + _PAD_Y          # progress bar area
-_SUM_H        = 18                                  # concurrency summary line height
-_HEADER_H     = _BAR_SECTION + _SUM_H + _PAD_Y     # total pinned header height
-
-
-# --------------------------------------------------------------------------
 
 class _JobRow:
     __slots__ = ("name", "stage", "shimmer", "alpha", "fading")
@@ -84,28 +60,26 @@ class _JobRow:
         self.fading  = False
 
 
-# --------------------------------------------------------------------------
-
 class AnimatedPipelineWidget(QWidget):
     """
-    Live pipeline job board.
-
-    Connect from PipelineWorker:
-        job_started    → on_job_started(name, stage)
-        job_updated    → on_job_updated(name, stage)
-        job_finished   → on_job_finished(name, success)
-        pipeline_count → on_count_updated(done, total)
+    Live pipeline job board.  Connect from PipelineWorker:
+        job_started    -> on_job_started(name, stage)
+        job_updated    -> on_job_updated(name, stage)
+        job_finished   -> on_job_finished(name, success)
+        pipeline_count -> on_count_updated(done, total)
     """
 
-    _BG         = QColor("#0d1117")
-    _CARD_BG    = QColor("#161b22")
-    _CARD_BD    = QColor("#21262d")
-    _TEXT       = QColor("#c9d1d9")
-    _TEXT_DIM   = QColor("#484f58")
-    _BAR_TRACK  = QColor("#21262d")
-    _SCROLL_BAR = QColor("#2a2d35")
-    _SCROLL_THB = QColor("#484f58")
-    _CONN_COL   = QColor("#30363d")
+    workers_changed = pyqtSignal(int)  # emitted when user clicks [−] / [+]
+
+    _BG          = QColor("#0d1117")
+    _CARD_BG     = QColor("#161b22")
+    _CARD_BG_Q   = QColor("#0f1317")
+    _CARD_BD     = QColor("#21262d")
+    _TEXT        = QColor("#e6edf3")
+    _TEXT_DIM    = QColor("#484f58")
+    _BAR_TRACK   = QColor("#21262d")
+    _SCROLL_RAIL = QColor("#21262d")
+    _SCROLL_THB  = QColor("#484f58")
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -113,6 +87,9 @@ class AnimatedPipelineWidget(QWidget):
         self._done:     int = 0
         self._total:    int = 0
         self._scroll_y: int = 0
+        self._worker_target: int = 2
+        self._dec_rect = None
+        self._inc_rect = None
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -122,77 +99,104 @@ class AnimatedPipelineWidget(QWidget):
         self.setFocusPolicy(Qt.FocusPolicy.WheelFocus)
         self._update_size()
 
-    # ------------------------------------------------------------------ public API
+    # ------------------------------------------------------------------ public
 
     def set_video_count(self, n: int) -> None:
-        self._total = n
-        self._update_size()
-        self.update()
+        self._total = n; self._update_size(); self.update()
 
     def set_total(self, n: int) -> None:
-        self._total = n
-        self._update_size()
-        self.update()
+        self._total = n; self._update_size(); self.update()
+
+    def set_worker_target(self, n: int) -> None:
+        self._worker_target = max(1, n); self.update()
 
     def on_job_started(self, name: str, stage: str) -> None:
-        self._rows = [r for r in self._rows if r.name != name]
-        self._rows.append(_JobRow(name, stage))
+        existing = next((r for r in self._rows if r.name == name), None)
+        if existing:
+            existing.stage   = stage
+            existing.shimmer = 0.0
+            existing.fading  = False
+        else:
+            row = _JobRow(name, stage)
+            if stage == 'queued':
+                self._rows.append(row)
+            else:
+                insert_at = sum(1 for r in self._rows
+                                if not r.fading and r.stage in _ACTIVE_STAGES)
+                self._rows.insert(insert_at, row)
+        self._sort_rows()
         self._clamp_scroll()
         self._update_size()
         self.update()
 
     def on_job_updated(self, name: str, stage: str) -> None:
-        for row in self._rows:
-            if row.name == name:
-                row.stage   = stage
-                row.shimmer = 0.0
+        for r in self._rows:
+            if r.name == name:
+                r.stage   = stage
+                r.shimmer = 0.0
                 break
+        self._sort_rows()
         self.update()
 
     def on_job_finished(self, name: str, success: bool) -> None:
-        for row in self._rows:
-            if row.name == name:
-                row.stage  = "done" if success else "failed"
-                row.fading = True
+        for r in self._rows:
+            if r.name == name:
+                r.stage  = "done" if success else "failed"
+                r.fading = True
                 break
         self.update()
 
     def on_count_updated(self, done: int, total: int) -> None:
-        self._done  = done
-        self._total = total
-        self._update_size()
-        self.update()
+        self._done = done; self._total = total
+        self._update_size(); self.update()
 
     # compat stubs
     def on_stage_started(self, stage: str) -> None: pass
-    def on_stage_completed(self, stage: str, success: bool) -> None: pass
+    def on_stage_completed(self, stage: str, ok: bool) -> None: pass
     def set_stage_total(self, stage: str, total: int) -> None:
         if self._total == 0:
-            self._total = total
-            self._update_size()
-            self.update()
+            self._total = total; self._update_size(); self.update()
     def on_item_completed(self, stage: str) -> None: pass
 
     def reset(self) -> None:
-        self._rows.clear()
-        self._done     = 0
-        self._total    = 0
-        self._scroll_y = 0
-        self._update_size()
-        self.update()
+        self._rows.clear(); self._done = 0; self._total = 0; self._scroll_y = 0
+        self._update_size(); self.update()
+
+    # ------------------------------------------------------------------ sort
+
+    def _sort_rows(self) -> None:
+        active = [r for r in self._rows if not r.fading and r.stage in _ACTIVE_STAGES]
+        fading = [r for r in self._rows if r.fading]
+        queued = [r for r in self._rows if not r.fading and r.stage not in _ACTIVE_STAGES]
+        self._rows = active + fading + queued
 
     # ------------------------------------------------------------------ scroll
 
-    def wheelEvent(self, event):  # noqa: N802
-        delta = event.angleDelta().y()
-        step  = int(_SCROLL_SPD * (-delta / 120))
+    def wheelEvent(self, ev):
+        step = int(_ROW_STEP * (-ev.angleDelta().y() / 120))
         self._scroll_y = max(0, min(self._scroll_y + step, self._max_scroll()))
         self.update()
 
+    def mousePressEvent(self, ev) -> None:
+        if ev.button() == Qt.MouseButton.LeftButton:
+            pos = ev.position()
+            if self._dec_rect and self._dec_rect.contains(pos):
+                n = max(1, self._worker_target - 1)
+                self._worker_target = n
+                self.workers_changed.emit(n)
+                self.update()
+                return
+            if self._inc_rect and self._inc_rect.contains(pos):
+                n = self._worker_target + 1
+                self._worker_target = n
+                self.workers_changed.emit(n)
+                self.update()
+                return
+        super().mousePressEvent(ev)
+
     def _max_scroll(self) -> int:
-        total_h  = len(self._rows) * _ROW_STEP + _PAD_Y
-        visible_h = self.height() - _HEADER_H
-        return max(0, total_h - visible_h)
+        total_h = len(self._rows) * _ROW_STEP + _PAD_Y
+        return max(0, total_h - (self.height() - _HEADER_H))
 
     def _clamp_scroll(self) -> None:
         self._scroll_y = max(0, min(self._scroll_y, self._max_scroll()))
@@ -202,16 +206,15 @@ class AnimatedPipelineWidget(QWidget):
     def _tick(self) -> None:
         changed = False
         live    = []
-        for row in self._rows:
-            if row.fading:
-                row.alpha = max(0.0, row.alpha - _FADE_STEP)
-                if row.alpha <= 0:
+        for r in self._rows:
+            if r.fading:
+                r.alpha = max(0.0, r.alpha - _FADE_STEP)
+                if r.alpha <= 0:
                     changed = True
                     continue
-            speed = _STAGE_SHIMMER.get(row.stage, 0.0)
-            if speed > 0:
-                row.shimmer = (row.shimmer + speed) % 1.3
-            live.append(row)
+            if r.stage in _ACTIVE_STAGES:
+                r.shimmer = (r.shimmer + _SHIMMER_SPD) % 1.0
+            live.append(r)
             changed = True
         if len(live) != len(self._rows):
             self._rows = live
@@ -220,99 +223,98 @@ class AnimatedPipelineWidget(QWidget):
         if changed:
             self.update()
 
-    # ------------------------------------------------------------------ layout
+    # ------------------------------------------------------------------ size
 
     def _update_size(self) -> None:
-        visible = min(len(self._rows), _MAX_VIS)
-        h = _HEADER_H + visible * _ROW_STEP + _PAD_Y
+        vis = min(len(self._rows), _MAX_VIS)
+        h   = _HEADER_H + vis * _ROW_STEP + _PAD_Y
         self.setFixedHeight(max(h, _HEADER_H + _PAD_Y))
 
     # ------------------------------------------------------------------ paint
 
-    def paintEvent(self, event):  # noqa: N802
+    def paintEvent(self, ev):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         W = float(self.width())
         p.fillRect(0, 0, int(W), self.height(), self._BG)
         self._draw_header(p, W)
-        self._draw_rows(p, W)
+        self._draw_rows_area(p, W)
         p.end()
 
     # ------------------------------------------------------------------ header
 
     def _draw_header(self, p: QPainter, W: float) -> None:
-        x = float(_PAD_X)
-        y = float(_PAD_Y)
+        x  = float(_PAD_X)
+        y  = float(_PAD_Y)
         bw = W - _PAD_X * 2
 
-        # Progress bar track
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QBrush(self._BAR_TRACK))
         p.drawRoundedRect(QRectF(x, y, bw, _BAR_H), _BAR_H / 2, _BAR_H / 2)
 
-        # Progress bar fill
         if self._total > 0:
             frac = min(self._done / self._total, 1.0)
             fw   = bw * frac
             if fw > 0:
-                p.setBrush(QBrush(_STAGE_COLOR["done"]))
+                p.setBrush(QBrush(_COLOR_DONE))
                 p.drawRoundedRect(QRectF(x, y, fw, _BAR_H), _BAR_H / 2, _BAR_H / 2)
 
-        # "N / M" label right-aligned over the bar
-        font = QFont(); font.setPointSize(8)
-        p.setFont(font)
-        p.setPen(QPen(self._TEXT_DIM))
-        label = f"{self._done} / {self._total}" if self._total else ""
-        p.drawText(
-            QRectF(x, y - 1, bw, _BAR_H),
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-            label,
-        )
-
-        # Concurrency summary  "2 ANALYZING · 1 CORRELATING · 4 CLIPPING"
-        counts = Counter(
-            row.stage for row in self._rows if not row.fading and row.stage in _PIPELINE
-        )
         sy = y + _BAR_H + 6
-        cx = x
-        font = QFont(); font.setPointSize(8); font.setBold(True)
-        p.setFont(font)
+        f  = QFont(); f.setPointSize(9); f.setBold(True); p.setFont(f)
         fm = p.fontMetrics()
 
-        if not counts:
+        if self._total:
             p.setPen(QPen(self._TEXT_DIM))
-            p.drawText(QRectF(cx, sy, bw, _SUM_H),
-                       Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                       "Waiting…")
+            p.drawText(
+                QRectF(x, sy, bw, _HEADER_SUM_H),
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                f"{self._done} / {self._total}",
+            )
+
+        n_active = sum(1 for r in self._rows if r.stage in _ACTIVE_STAGES and not r.fading)
+        if n_active == 0:
+            self._dec_rect = self._inc_rect = None
+            p.setPen(QPen(self._TEXT_DIM))
+            p.drawText(QRectF(x, sy, bw, _HEADER_SUM_H),
+                       Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                       "Waiting...")
         else:
-            parts = []
-            for s in _PIPELINE:
-                n = counts.get(s, 0)
-                if n:
-                    parts.append((n, s))
+            label = f"{n_active} processing"
+            lw = float(fm.horizontalAdvance(label))
+            p.setPen(QPen(self._TEXT))
+            p.drawText(QRectF(x, sy, lw + 2, _HEADER_SUM_H),
+                       Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                       label)
+            self._draw_worker_stepper(p, fm, x + lw + 10, sy)
 
-            dot = "  ·  "
-            dot_w = fm.horizontalAdvance(dot)
+    def _draw_worker_stepper(self, p: QPainter, fm, sx: float, sy: float) -> None:
+        """Draw [−] N [+] stepper and record click-test rects for mousePressEvent."""
+        bw, bh = 14.0, 14.0
+        gap    = 3.0
+        step_y = sy + (_HEADER_SUM_H - bh) / 2.0
 
-            for i, (n, s) in enumerate(parts):
-                col = QColor(_STAGE_COLOR[s])
-                text = f"{n} {_STAGE_LABEL[s]}"
-                tw = fm.horizontalAdvance(text)
-                p.setPen(QPen(col))
-                p.drawText(QRectF(cx, sy, tw + 2, _SUM_H),
-                           Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                           text)
-                cx += tw
-                if i < len(parts) - 1:
-                    p.setPen(QPen(self._TEXT_DIM))
-                    p.drawText(QRectF(cx, sy, dot_w + 2, _SUM_H),
-                               Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                               dot)
-                    cx += dot_w
+        ts = str(self._worker_target)
+        tw = float(fm.horizontalAdvance(ts)) + 8.0
+
+        self._dec_rect = QRectF(sx,                        step_y, bw, bh)
+        self._inc_rect = QRectF(sx + bw + gap + tw + gap, step_y, bw, bh)
+
+        dim = QColor(self._TEXT_DIM)
+        for rect, ch in ((self._dec_rect, '−'), (self._inc_rect, '+')):
+            p.setPen(QPen(dim, 1))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRoundedRect(rect, 2, 2)
+            fb = QFont(); fb.setPointSize(7); fb.setBold(True); p.setFont(fb)
+            p.setPen(QPen(dim))
+            p.drawText(rect, Qt.AlignmentFlag.AlignCenter, ch)
+
+        fn = QFont(); fn.setPointSize(9); p.setFont(fn)
+        p.setPen(QPen(dim))
+        p.drawText(QRectF(sx + bw + gap, step_y, tw, bh), Qt.AlignmentFlag.AlignCenter, ts)
 
     # ------------------------------------------------------------------ rows
 
-    def _draw_rows(self, p: QPainter, W: float) -> None:
+    def _draw_rows_area(self, p: QPainter, W: float) -> None:
         if not self._rows:
             return
 
@@ -321,168 +323,150 @@ class AnimatedPipelineWidget(QWidget):
 
         p.save()
         p.setClipRect(QRectF(0, vp_top, W, vp_h))
-
         y = vp_top + _PAD_Y // 2 - self._scroll_y
         for row in self._rows:
             if y + _ROW_H > vp_top and y < vp_top + vp_h:
-                self._draw_one_row(p, W, y, row, int(row.alpha * 255))
+                self._draw_card(p, W, y, row, int(row.alpha * 255))
             y += _ROW_STEP
-
         p.restore()
+
+        if self._max_scroll() > 0 and self._scroll_y < self._max_scroll():
+            fade_h = 32.0
+            grad   = QLinearGradient(0, vp_top + vp_h - fade_h, 0, vp_top + vp_h)
+            grad.setColorAt(0.0, QColor(13, 17, 23, 0))
+            grad.setColorAt(1.0, QColor(13, 17, 23, 210))
+            p.fillRect(QRectF(0, vp_top + vp_h - fade_h, W, fade_h), QBrush(grad))
 
         if self._max_scroll() > 0:
             self._draw_scrollbar(p, W, vp_top, vp_h)
 
-    def _draw_scrollbar(self, p: QPainter, W: float,
-                        vp_top: float, vp_h: float) -> None:
-        tw  = 4.0
-        tx  = W - _PAD_X // 2 - tw
-        tr  = QRectF(tx, vp_top + 4, tw, vp_h - 8)
+    def _draw_scrollbar(self, p, W, vp_top, vp_h):
+        tw = 3.0; tx = W - 6.0
+        tr = QRectF(tx, vp_top + 6, tw, vp_h - 12)
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QBrush(self._SCROLL_BAR))
-        p.drawRoundedRect(tr, 2, 2)
+        p.setBrush(QBrush(self._SCROLL_RAIL))
+        p.drawRoundedRect(tr, 1.5, 1.5)
         total_h = len(self._rows) * _ROW_STEP + _PAD_Y
-        th = max(20.0, vp_h * (vp_h / total_h))
-        sc = self._scroll_y / max(1, self._max_scroll())
-        ty = vp_top + 4 + sc * (vp_h - 8 - th)
+        th  = max(18.0, vp_h * (vp_h / total_h))
+        sc  = self._scroll_y / max(1, self._max_scroll())
+        ty  = vp_top + 6 + sc * (vp_h - 12 - th)
         p.setBrush(QBrush(self._SCROLL_THB))
-        p.drawRoundedRect(QRectF(tx, ty, tw, th), 2, 2)
+        p.drawRoundedRect(QRectF(tx, ty, tw, th), 1.5, 1.5)
 
-    def _draw_one_row(self, p: QPainter, W: float, y: float,
-                      row: _JobRow, alpha: int) -> None:
+    # ------------------------------------------------------------------ card
+
+    def _draw_card(self, p: QPainter, W: float, y: float,
+                   row: _JobRow, alpha: int) -> None:
         x  = float(_PAD_X)
         rw = W - _PAD_X * 2
         rh = float(_ROW_H)
 
-        # Card background
-        bg = QColor(self._CARD_BG); bg.setAlpha(alpha)
-        bd = QColor(self._CARD_BD); bd.setAlpha(alpha)
-        p.setBrush(QBrush(bg))
-        p.setPen(QPen(bd, 1))
+        is_active = row.stage in _ACTIVE_STAGES
+        is_queued = not is_active and not row.fading
+        col = (_COLOR_ACTIVE if is_active else
+               _COLOR_DONE   if row.stage == "done" else
+               _COLOR_FAILED if row.stage == "failed" else
+               self._CARD_BD)
+
+        card_bg = QColor(self._CARD_BG_Q if is_queued else self._CARD_BG)
+        card_bg.setAlpha(alpha)
+        p.setBrush(QBrush(card_bg))
+        p.setPen(Qt.PenStyle.NoPen)
         p.drawRoundedRect(QRectF(x, y, rw, rh), 6, 6)
 
-        # --- Filename (top portion) ---
-        fname_h = rh - _PIPE_H - 8    # space for filename above pipeline row
-        font = QFont(); font.setPointSize(10)
-        p.setFont(font)
-        tc = QColor(self._TEXT); tc.setAlpha(alpha)
-        p.setPen(QPen(tc))
-
-        name_x = x + 10
-        name_w = rw - 20
-        elided = p.fontMetrics().elidedText(
-            row.name, Qt.TextElideMode.ElideRight, int(name_w)
-        )
-        p.drawText(
-            QRectF(name_x, y, name_w, fname_h),
-            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-            elided,
-        )
-
-        # --- Pipeline mini-view (bottom portion) ---
-        pipe_y = y + fname_h + 2
-        self._draw_pipeline_row(p, x + 10, pipe_y, rw - 20, row, alpha)
-
-    def _draw_pipeline_row(self, p: QPainter, x: float, y: float, w: float,
-                           row: _JobRow, alpha: int) -> None:
-        """Draw [ANALYZE] ──▶── [CORRELATE] ──▶── [CLIP] inline."""
-
-        stage_idx = _PIPELINE.index(row.stage) if row.stage in _PIPELINE else (
-            len(_PIPELINE) if row.stage in ("done", "failed") else -1
-        )
-
-        # Layout: compute total pipeline width and center it in w
-        total_pipe_w = sum(_STAGE_PW[s] for s in _PIPELINE) + _ARROW_W * (len(_PIPELINE) - 1)
-        start_x = x + max(0.0, (w - total_pipe_w) / 2)
-
-        cx = start_x
-        for i, stage in enumerate(_PIPELINE):
-            pw = float(_STAGE_PW[stage])
-            ph = float(_PILL_H)
-            pill_y = y + (_PIPE_H - ph) / 2
-
-            if i < stage_idx:
-                # Done stage: dim fill + ✓
-                self._draw_stage_pill_done(p, cx, pill_y, pw, ph, stage, alpha)
-            elif i == stage_idx:
-                # Active stage: bright + shimmer
-                self._draw_stage_pill_active(p, cx, pill_y, pw, ph, stage, row, alpha)
-            else:
-                # Pending: ghost outline
-                self._draw_stage_pill_pending(p, cx, pill_y, pw, ph, stage, alpha)
-
-            cx += pw
-
-            # Connector arrow between pills
-            if i < len(_PIPELINE) - 1:
-                arrow_color = QColor(self._CONN_COL)
-                arrow_color.setAlpha(alpha)
-                p.setPen(QPen(arrow_color, 1))
-                mid_y = pill_y + ph / 2
-                p.drawLine(
-                    int(cx + 2), int(mid_y),
-                    int(cx + _ARROW_W - 4), int(mid_y)
-                )
-                # arrowhead
-                tip_x = cx + _ARROW_W - 4
-                p.drawLine(int(tip_x), int(mid_y), int(tip_x - 4), int(mid_y - 3))
-                p.drawLine(int(tip_x), int(mid_y), int(tip_x - 4), int(mid_y + 3))
-                cx += _ARROW_W
-
-    def _draw_stage_pill_done(self, p: QPainter, x: float, y: float,
-                              w: float, h: float, stage: str, alpha: int) -> None:
-        col = QColor(_STAGE_COLOR[stage])
-        col.setAlpha(int(alpha * 0.45))
-        bg  = QColor(_STAGE_COLOR[stage]); bg.setAlpha(int(alpha * 0.08))
-        p.setBrush(QBrush(bg))
-        p.setPen(QPen(col, 1))
-        p.drawRoundedRect(QRectF(x, y, w, h), _PILL_R, _PILL_R)
-        font = QFont(); font.setPointSize(6)
-        p.setFont(font)
-        p.setPen(QPen(col))
-        p.drawText(QRectF(x, y, w, h), Qt.AlignmentFlag.AlignCenter, "✓")
-
-    def _draw_stage_pill_active(self, p: QPainter, x: float, y: float,
-                                w: float, h: float, stage: str,
-                                row: _JobRow, alpha: int) -> None:
-        col    = QColor(_STAGE_COLOR[stage]); col.setAlpha(alpha)
-        bg_col = QColor(_STAGE_COLOR[stage]); bg_col.setAlpha(int(alpha * 0.22))
-        p.setBrush(QBrush(bg_col))
-        p.setPen(QPen(col, 1))
-        p.drawRoundedRect(QRectF(x, y, w, h), _PILL_R, _PILL_R)
-
-        # Shimmer sweep
-        if row.shimmer < 1.15:
-            sx  = x + w * (row.shimmer - 0.15)
-            sw  = w * 0.35
-            g   = QLinearGradient(sx, y, sx + sw, y)
-            shim = QColor(255, 255, 255, int(35 * row.alpha))
-            g.setColorAt(0.0, QColor(255, 255, 255, 0))
-            g.setColorAt(0.5, shim)
-            g.setColorAt(1.0, QColor(255, 255, 255, 0))
-            p.save()
-            clip = QPainterPath()
-            clip.addRoundedRect(QRectF(x, y, w, h), _PILL_R, _PILL_R)
-            p.setClipPath(clip)
-            p.setBrush(QBrush(g))
-            p.setPen(Qt.PenStyle.NoPen)
-            p.drawRect(QRectF(sx, y, sw, h))
-            p.restore()
-
-        font = QFont(); font.setPointSize(6); font.setBold(True)
-        p.setFont(font)
-        p.setPen(QPen(col))
-        p.drawText(QRectF(x, y, w, h), Qt.AlignmentFlag.AlignCenter,
-                   _STAGE_LABEL[stage])
-
-    def _draw_stage_pill_pending(self, p: QPainter, x: float, y: float,
-                                 w: float, h: float, stage: str, alpha: int) -> None:
-        col = QColor(self._TEXT_DIM); col.setAlpha(int(alpha * 0.5))
+        if is_active:
+            bd = QColor(col); bd.setAlpha(int(alpha * 0.55))
+        else:
+            bd = QColor(self._CARD_BD); bd.setAlpha(alpha)
         p.setBrush(Qt.BrushStyle.NoBrush)
-        p.setPen(QPen(col, 1))
-        p.drawRoundedRect(QRectF(x, y, w, h), _PILL_R, _PILL_R)
-        font = QFont(); font.setPointSize(6)
-        p.setFont(font)
-        p.setPen(QPen(col))
-        p.drawText(QRectF(x, y, w, h), Qt.AlignmentFlag.AlignCenter,
-                   _STAGE_LABEL[stage])
+        p.setPen(QPen(bd, 1))
+        p.drawRoundedRect(QRectF(x + 0.5, y + 0.5, rw - 1, rh - 1), 5.5, 5.5)
+
+        f = QFont(); f.setPointSize(10); p.setFont(f)
+        tc = QColor(self._TEXT if not is_queued else self._TEXT_DIM)
+        tc.setAlpha(alpha)
+        p.setPen(QPen(tc))
+        name_rect = QRectF(x + 10, y + 4, rw - 20, float(_NAME_H))
+        elided = p.fontMetrics().elidedText(
+            row.name, Qt.TextElideMode.ElideMiddle, int(rw - 20)
+        )
+        p.drawText(name_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, elided)
+
+        bx = x + 10
+        by = y + _NAME_H + 4
+        bw = rw - 20
+        bh = float(_PROC_H)
+
+        if is_active:
+            self._draw_bar_active(p, bx, by, bw, bh, row, alpha)
+        elif is_queued:
+            self._draw_bar_queued(p, bx, by, bw, bh, alpha)
+        else:
+            self._draw_bar_done(p, bx, by, bw, bh, col, row.stage, alpha)
+
+    # ------------------------------------------------------------------ bar renderers
+
+    def _draw_bar_active(self, p, x, y, w, h, row, alpha):
+        r = h / 2
+
+        bg = QColor(_COLOR_ACTIVE); bg.setAlpha(int(alpha * 0.18))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(bg))
+        p.drawRoundedRect(QRectF(x, y, w, h), r, r)
+
+        cx = x + w * (row.shimmer * 1.5 - 0.25)
+        ww = w * 0.60
+
+        grad = QLinearGradient(cx - ww / 2, y, cx + ww / 2, y)
+        grad.setColorAt(0.00, QColor(249, 115, 22,   0))
+        grad.setColorAt(0.28, QColor(249, 115, 22,   int(alpha * 0.42)))
+        grad.setColorAt(0.47, QColor(255, 195, 120,  int(alpha * 0.88)))
+        grad.setColorAt(0.50, QColor(255, 240, 200,  int(alpha * 0.70)))
+        grad.setColorAt(0.53, QColor(255, 195, 120,  int(alpha * 0.88)))
+        grad.setColorAt(0.72, QColor(249, 115, 22,   int(alpha * 0.42)))
+        grad.setColorAt(1.00, QColor(249, 115, 22,   0))
+
+        p.save()
+        clip = QPainterPath()
+        clip.addRoundedRect(QRectF(x, y, w, h), r, r)
+        p.setClipPath(clip)
+        p.setBrush(QBrush(grad))
+        p.drawRect(QRectF(cx - ww / 2, y, ww, h))
+        p.restore()
+
+        bd = QColor(_COLOR_ACTIVE); bd.setAlpha(int(alpha * 0.65))
+        p.setPen(QPen(bd, 1))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRoundedRect(QRectF(x, y, w, h), r, r)
+
+        f = QFont(); f.setPointSize(7); f.setBold(True); p.setFont(f)
+        lc = QColor(_COLOR_ACTIVE); lc.setAlpha(int(alpha * 0.9))
+        p.setPen(QPen(lc))
+        p.drawText(QRectF(x, y, w, h), Qt.AlignmentFlag.AlignCenter, "PROCESSING")
+
+    def _draw_bar_queued(self, p, x, y, w, h, alpha):
+        r = h / 2
+        track = QColor(self._BAR_TRACK); track.setAlpha(int(alpha * 0.5))
+        p.setPen(QPen(track, 1))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRoundedRect(QRectF(x, y, w, h), r, r)
+        f = QFont(); f.setPointSize(7); p.setFont(f)
+        dim = QColor(self._TEXT_DIM); dim.setAlpha(int(alpha * 0.45))
+        p.setPen(QPen(dim))
+        p.drawText(QRectF(x, y, w, h), Qt.AlignmentFlag.AlignCenter, "QUEUED")
+
+    def _draw_bar_done(self, p, x, y, w, h, col, stage, alpha):
+        r = h / 2
+        fill = QColor(col); fill.setAlpha(int(alpha * 0.50))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(fill))
+        p.drawRoundedRect(QRectF(x, y, w, h), r, r)
+        bd = QColor(col); bd.setAlpha(int(alpha * 0.3))
+        p.setPen(QPen(bd, 1))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRoundedRect(QRectF(x, y, w, h), r, r)
+        f = QFont(); f.setPointSize(7); f.setBold(True); p.setFont(f)
+        tc = QColor(col); tc.setAlpha(int(alpha * 0.9))
+        p.setPen(QPen(tc))
+        label = "DONE" if stage == "done" else "FAILED"
+        p.drawText(QRectF(x, y, w, h), Qt.AlignmentFlag.AlignCenter, label)
