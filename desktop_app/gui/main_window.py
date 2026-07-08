@@ -147,13 +147,6 @@ class ChaosMainWindow(QMainWindow):
 
         root.addWidget(wizard_bar)
 
-        # Status bar
-        self._status_bar = QStatusBar()
-        self.setStatusBar(self._status_bar)
-        self._status_label = QLabel("Ready")
-        self._status_label.setStyleSheet("color: #6b7280;")
-        self._status_bar.addWidget(self._status_label)
-
     def _make_nav_button(self, text: str, active: bool) -> QPushButton:
         btn = QPushButton(text)
         btn.setObjectName("navButton")
@@ -220,10 +213,7 @@ class ChaosMainWindow(QMainWindow):
             self._ensure_views_loaded()
             self._results_view.set_input_size(input_bytes)
             self._watch_view.mark_dirty()   # new clips available; reload on next visit
-            self._update_status("Pipeline complete — highlights ready")
             self._switch_view(2)
-        else:
-            self._update_status("Pipeline finished with errors — check the log")
 
     # ------------------------------------------------------------------ setup
 
@@ -242,10 +232,8 @@ class ChaosMainWindow(QMainWindow):
 
             self._ensure_views_loaded()
             self._stack.setCurrentIndex(0)
-            self._update_status("Ready")
 
         except Exception as e:
-            self._update_status(f"Error during startup: {e}")
             self._ensure_views_loaded()
 
     # ------------------------------------------------------------------ config / theme
@@ -282,9 +270,6 @@ class ChaosMainWindow(QMainWindow):
             self._cuda_lbl.setStyleSheet(
                 f"color: {col}; font-size: 10px; background: transparent;"
             )
-
-    def _update_status(self, msg: str):
-        self._status_label.setText(msg)
 
     def closeEvent(self, event):
         try:
