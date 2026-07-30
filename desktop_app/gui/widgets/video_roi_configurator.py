@@ -202,7 +202,7 @@ class VideoROIConfigurator(QWidget):
         
         # Video controls
         controls_layout = QHBoxLayout()
-        self.play_pause_btn = QPushButton("⏸️")
+        self.play_pause_btn = QPushButton("Play")
         self.play_pause_btn.setEnabled(False)
         self.seek_slider = QSlider(Qt.Orientation.Horizontal)
         self.seek_slider.setEnabled(False)
@@ -219,7 +219,7 @@ class VideoROIConfigurator(QWidget):
         self.video_display.roi_dragged.connect(self.on_roi_dragged)
         
         # ROI status
-        self.roi_status_label = QLabel("❌ No ROI configured")
+        self.roi_status_label = QLabel("No ROI configured")
         self.roi_status_label.setStyleSheet("font-weight: bold;")
         
         # Action buttons
@@ -314,7 +314,7 @@ class VideoROIConfigurator(QWidget):
                 self.fps = 30  # Default FPS
                 
             self.seek_slider.setMaximum(self.total_frames - 1)
-            self.video_path_label.setText(f"📹 {os.path.basename(video_path)}")
+            self.video_path_label.setText(f"{os.path.basename(video_path)}")
             self.video_path_label.setStyleSheet("color: #000; font-weight: bold;")
             
             # Enable controls
@@ -383,10 +383,10 @@ class VideoROIConfigurator(QWidget):
         """Toggle video playback."""
         if self.play_timer.isActive():
             self.play_timer.stop()
-            self.play_pause_btn.setText("▶️")
+            self.play_pause_btn.setText("Play")
         else:
             self.play_timer.start(int(1000 / self.fps))
-            self.play_pause_btn.setText("⏸️")
+            self.play_pause_btn.setText("Pause")
             
     def next_frame(self):
         """Advance to next frame during playback."""
@@ -394,7 +394,7 @@ class VideoROIConfigurator(QWidget):
             self.seek_to_frame(self.current_frame_number + 1)
         else:
             self.play_timer.stop()
-            self.play_pause_btn.setText("▶️")
+            self.play_pause_btn.setText("Play")
             
     def on_roi_dragged(self, roi_type, coordinates):
         """Handle ROI drag events from video display."""
@@ -411,14 +411,14 @@ class VideoROIConfigurator(QWidget):
         status_parts = []
         
         if self.killfeed_roi:
-            status_parts.append(f"✅ Killfeed ROI: {self.killfeed_roi}")
+            status_parts.append(f"Killfeed ROI: {self.killfeed_roi}")
         else:
-            status_parts.append("❌ Killfeed ROI: Not set")
+            status_parts.append("Killfeed ROI: Not set")
             
         if self.chat_roi:
-            status_parts.append(f"✅ Chat ROI: {self.chat_roi}")
+            status_parts.append(f"Chat ROI: {self.chat_roi}")
         else:
-            status_parts.append("❌ Chat ROI: Not set")
+            status_parts.append("Chat ROI: Not set")
             
         self.roi_status_label.setText(" | ".join(status_parts))
         

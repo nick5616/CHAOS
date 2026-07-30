@@ -17,20 +17,39 @@ from desktop_app.gui.utils.theme_manager import ThemeManager
 
 class _CudaCheckThread(QThread):
     result = pyqtSignal(str, str)  # display text, css colour
+    gpu_info = pyqtSignal(dict)    # full detection info, for persisting to config
 
     def run(self) -> None:
+        from desktop_app.gui.utils.system_detector import SystemDetector
+
+        info = {'cuda_available': False}
         try:
             import torch
             if torch.cuda.is_available():
                 txt = f"CUDA  {torch.cuda.get_device_name(0)}"
                 col = "#22c55e"
+                info['cuda_available'] = True
+                info['gpu_present'] = True
+                info['gpu_name'] = torch.cuda.get_device_name(0)
+                info['driver_version'] = None
+                info['max_cuda_version'] = None
             else:
-                txt = "CPU only"
-                col = "#6b7280"
+                gpu = SystemDetector.detect_nvidia_gpu()
+                info['gpu_present'] = gpu.get('present', False)
+                info['gpu_name'] = gpu.get('name')
+                info['driver_version'] = gpu.get('driver_version')
+                info['max_cuda_version'] = gpu.get('max_cuda_version')
+                if info['gpu_present']:
+                    txt = f"{info['gpu_name']} detected — CUDA disabled"
+                    col = "#e8963c"
+                else:
+                    txt = "CPU only"
+                    col = "#6b7280"
         except Exception:
             txt = ""
             col = ""
         self.result.emit(txt, col)
+        self.gpu_info.emit(info)
 
 
 class ChaosMainWindow(QMainWindow):
@@ -54,6 +73,7 @@ class ChaosMainWindow(QMainWindow):
 
         self._cuda_thread = _CudaCheckThread(self)
         self._cuda_thread.result.connect(self._on_cuda_checked)
+        self._cuda_thread.gpu_info.connect(self._on_gpu_info)
         self._cuda_thread.start()
 
     # ------------------------------------------------------------------ build
@@ -105,10 +125,9 @@ class ChaosMainWindow(QMainWindow):
 
         nav_layout.addStretch()
 
-        self._settings_btn = QPushButton("⚙")
+        self._settings_btn = QPushButton("Settings")
         self._settings_btn.setObjectName("settingsButton")
         self._settings_btn.setToolTip("Settings")
-        self._settings_btn.setFixedSize(36, 36)
         self._settings_btn.clicked.connect(self._open_settings)
         nav_layout.addWidget(self._settings_btn)
 
@@ -213,7 +232,7 @@ class ChaosMainWindow(QMainWindow):
             self._ensure_views_loaded()
             self._results_view.set_input_size(input_bytes)
             self._watch_view.mark_dirty()   # new clips available; reload on next visit
-            self._switch_view(2)
+            # Don't auto-navigate — user stays on Run to see the log and go to Results when ready
 
     # ------------------------------------------------------------------ setup
 
@@ -270,6 +289,22 @@ class ChaosMainWindow(QMainWindow):
             self._cuda_lbl.setStyleSheet(
                 f"color: {col}; font-size: 10px; background: transparent;"
             )
+
+    def _on_gpu_info(self, info: dict) -> None:
+        try:
+            config = self.config_manager.load_config()
+            system = config.setdefault("system", {})
+            system["cuda_available"] = info.get("cuda_available", False)
+            system["gpu_present"] = info.get("gpu_present", False)
+            system["gpu_name"] = info.get("gpu_name")
+            system["nvidia_driver_version"] = info.get("driver_version")
+            system["nvidia_max_cuda_version"] = info.get("max_cuda_version")
+            self.config_manager.save_config(config)
+        except Exception:
+            pass
+
+        if self._run_view:
+            self._run_view.refresh_hw_badge()
 
     def closeEvent(self, event):
         try:

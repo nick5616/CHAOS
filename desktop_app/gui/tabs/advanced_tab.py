@@ -27,19 +27,20 @@ class AdvancedTab(QWidget):
         layout = QVBoxLayout()
         
         # Title
-        title = QLabel("🔬 Advanced Settings")
+        title = QLabel("Advanced Settings")
         title.setFont(QFont("Arial", 16, QFont.Weight.Bold))
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
         
         # Warning
-        warning = QLabel("⚠️ These settings are for advanced users. Incorrect values may cause detection issues.")
+        warning = QLabel("These settings are for advanced users. Incorrect values may cause detection issues.")
         warning.setStyleSheet("color: #ff9800; font-weight: bold; padding: 10px; background-color: #fff3cd; border: 1px solid #ffeaa7; border-radius: 5px;")
         warning.setWordWrap(True)
         layout.addWidget(warning)
         
         # Create scroll area for the content
         scroll_area = QScrollArea()
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
         scroll_widget = QWidget()
         scroll_layout = QVBoxLayout(scroll_widget)
         
@@ -74,7 +75,7 @@ class AdvancedTab(QWidget):
         
     def create_color_detection_group(self):
         """Create the color detection parameters group."""
-        group = QGroupBox("🎨 Color Detection Parameters")
+        group = QGroupBox("Color Detection Parameters")
         layout = QVBoxLayout()
         
         # Red HSV Range 1
@@ -170,7 +171,7 @@ class AdvancedTab(QWidget):
         
     def create_shape_detection_group(self):
         """Create the shape detection parameters group."""
-        group = QGroupBox("📏 Shape Detection Parameters")
+        group = QGroupBox("Shape Detection Parameters")
         layout = QVBoxLayout()
         
         # Height range
@@ -213,7 +214,7 @@ class AdvancedTab(QWidget):
         
     def create_timing_group(self):
         """Create the timing parameters group."""
-        group = QGroupBox("⏱️ Timing Parameters")
+        group = QGroupBox("Timing Parameters")
         layout = QVBoxLayout()
         
         # Kill memory duration
@@ -271,7 +272,7 @@ class AdvancedTab(QWidget):
         
     def create_scoring_group(self):
         """Create the scoring weights group."""
-        group = QGroupBox("🎯 Scoring Weights")
+        group = QGroupBox("Scoring Weights")
         layout = QVBoxLayout()
         
         # Kill weight
@@ -317,15 +318,15 @@ class AdvancedTab(QWidget):
         group = QGroupBox("Actions")
         layout = QHBoxLayout()
         
-        self.save_btn = QPushButton("💾 Save Settings")
+        self.save_btn = QPushButton("Save Settings")
         self.save_btn.clicked.connect(self.save_settings)
         layout.addWidget(self.save_btn)
         
-        self.reset_btn = QPushButton("🔄 Reset to Defaults")
+        self.reset_btn = QPushButton("Reset to Defaults")
         self.reset_btn.clicked.connect(self.reset_to_defaults)
         layout.addWidget(self.reset_btn)
         
-        self.test_btn = QPushButton("🧪 Test Settings")
+        self.test_btn = QPushButton("Test Settings")
         self.test_btn.clicked.connect(self.test_settings)
         layout.addWidget(self.test_btn)
         

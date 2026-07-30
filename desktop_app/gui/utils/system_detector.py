@@ -2,6 +2,7 @@
 System detection utilities for the CHAOS desktop application.
 """
 
+import re
 import subprocess
 import sys
 import platform
@@ -104,29 +105,94 @@ class SystemDetector:
             }
     
     @staticmethod
-    def get_pytorch_install_command() -> str:
+    def detect_nvidia_gpu() -> Dict[str, "any"]:
+        """Detect an NVIDIA GPU via nvidia-smi, independent of PyTorch.
+
+        Unlike detect_cuda(), this works even when PyTorch isn't installed or
+        was installed as a CPU-only build, so the UI can tell "no GPU" apart
+        from "GPU present but CUDA-enabled PyTorch isn't".
+
+        Returns:
+            Dictionary with GPU presence, name, driver version, and the
+            highest CUDA version the installed driver supports.
+        """
+        try:
+            query = subprocess.run(
+                ["nvidia-smi", "--query-gpu=name,driver_version", "--format=csv,noheader"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if query.returncode != 0 or not query.stdout.strip():
+                return {'present': False, 'name': None, 'driver_version': None, 'max_cuda_version': None}
+
+            first_line = query.stdout.strip().splitlines()[0]
+            parts = [p.strip() for p in first_line.split(",")]
+            name = parts[0] if parts and parts[0] else "NVIDIA GPU"
+            driver_version = parts[1] if len(parts) > 1 else None
+
+            max_cuda_version = None
+            header = subprocess.run(["nvidia-smi"], capture_output=True, text=True, timeout=10)
+            # Older drivers print "CUDA Version: 12.4"; newer ones (R580+) print
+            # "CUDA UMD Version: 13.2" instead - match both.
+            match = re.search(r"CUDA(?:\s+UMD)?\s+Version:\s*([\d.]+)", header.stdout)
+            if match:
+                max_cuda_version = match.group(1)
+
+            return {
+                'present': True,
+                'name': name,
+                'driver_version': driver_version,
+                'max_cuda_version': max_cuda_version,
+            }
+
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return {'present': False, 'name': None, 'driver_version': None, 'max_cuda_version': None}
+        except Exception as e:
+            return {'present': False, 'name': None, 'driver_version': None, 'max_cuda_version': None, 'error': str(e)}
+
+    @staticmethod
+    def get_pytorch_install_command(max_cuda_version: Optional[str] = None) -> str:
         """Get the appropriate PyTorch installation command.
-        
+
+        Args:
+            max_cuda_version: The highest CUDA version the installed NVIDIA
+                driver supports (as reported by nvidia-smi). If omitted, this
+                is looked up via detect_nvidia_gpu().
+
         Returns:
             PyTorch installation command string.
         """
-        cuda_info = SystemDetector.detect_cuda()
-        
-        if cuda_info['available'] and cuda_info['version']:
-            cuda_version = cuda_info['version']
-            
-            if cuda_version.startswith('11.8'):
-                return "pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118"
-            elif cuda_version.startswith('12.1'):
-                return "pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121"
-            elif cuda_version.startswith('12.4'):
-                return "pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124"
-            else:
-                # Fallback to CPU version for unsupported CUDA versions
-                return "pip install torch torchvision torchaudio"
-        else:
-            # CPU-only version
+        if max_cuda_version is None:
+            max_cuda_version = SystemDetector.detect_nvidia_gpu().get('max_cuda_version')
+
+        def _version_tuple(v: str) -> tuple:
+            try:
+                bits = v.split('.')
+                return (int(bits[0]), int(bits[1]) if len(bits) > 1 else 0)
+            except (ValueError, IndexError):
+                return (0, 0)
+
+        if not max_cuda_version:
+            # No NVIDIA driver detected - CPU-only version
             return "pip install torch torchvision torchaudio"
+
+        version = _version_tuple(max_cuda_version)
+
+        # Pick the newest CUDA wheel tag the installed driver can run.
+        if version >= (12, 9):
+            tag = "cu129"
+        elif version >= (12, 8):
+            tag = "cu128"
+        elif version >= (12, 6):
+            tag = "cu126"
+        elif version >= (11, 8):
+            tag = "cu118"
+        else:
+            # Driver too old for any currently-supported PyTorch CUDA build
+            return "pip install torch torchvision torchaudio"
+
+        return f"pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/{tag}"
     
     @staticmethod
     def check_dependencies() -> Dict[str, any]:

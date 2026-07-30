@@ -190,9 +190,16 @@ def _parse_and_identify_kill(text: str) -> dict | None:
         "raw_text": text
     }
 
+def _find_fuzzy_victim(victim: str, active_kills: dict, threshold: int = 75) -> str | None:
+    """Return the matching key in active_kills if one is fuzzy-similar enough, else None."""
+    for known in active_kills:
+        if fuzz.ratio(victim.lower(), known.lower()) >= threshold:
+            return known
+    return None
+
 def analyze_killfeed(video_path: str, config: dict, reader) -> list:
     kill_events = []
-    
+
     # --- STATE MACHINE: Stores victims currently on screen to prevent duplicates ---
     active_kills = {} # Format: { "victim_name": {"first_seen": timestamp} }
     
@@ -256,18 +263,17 @@ def analyze_killfeed(video_path: str, config: dict, reader) -> list:
             if not parsed_info or not parsed_info.get('victim'): continue
 
             victim = parsed_info['victim']
-            current_frame_victims.add(victim)
-            
+            # Canonicalize via fuzzy match so OCR variants map to the same victim
+            canonical_victim = _find_fuzzy_victim(victim, active_kills) or victim
+            current_frame_victims.add(canonical_victim)
+
             # 3. STATE LOGIC: Check if this is a new, unseen kill
-            if victim not in active_kills:
+            if canonical_victim not in active_kills:
                 # This is a new kill!
                 _save_debug_screenshot(config, kill_line_image, video_path, "kill_NEW", timestamp, suffix=f"_{victim}")
                 
-                # --- THIS IS THE CRITICAL FIX ---
-                # A. IMMEDIATELY add it to our memory to prevent future duplicates.
-                active_kills[victim] = {"first_seen": timestamp}
-                
-                # B. THEN, check if it's a kill we care about (one of our kills).
+                active_kills[canonical_victim] = {"first_seen": timestamp}
+
                 if parsed_info['is_player_kill']:
                     # Detect special kill types (headshot and smoke)
                     is_headshot = _detect_headshot_icon(kill_line_image)
@@ -310,6 +316,9 @@ def analyze_audio(video_path: str, model, temp_dir: str) -> tuple[list, list]:
         transcription = model.transcribe(audio_path, fp16=False)
         voice_events = []
         for segment in transcription['segments']:
+            # Skip segments Whisper itself is uncertain about (likely noise/music)
+            if segment.get('no_speech_prob', 0) > 0.5:
+                continue
             voice_events.append({"source_video": video_path, "timestamp_seconds": segment['start'], "type": "voice", "details": {"text": segment['text']}})
         y, sr = librosa.load(audio_path, sr=16000)
         rms = librosa.feature.rms(y=y, frame_length=2048, hop_length=512)[0]

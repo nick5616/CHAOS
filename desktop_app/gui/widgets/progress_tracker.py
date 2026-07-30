@@ -146,11 +146,11 @@ class ProgressTracker(QWidget):
     def format_stage_name(self, stage: str) -> str:
         """Format stage name for display."""
         stage_names = {
-            "ingest": "📁 Video Ingestion",
-            "analyze": "🔍 Video Analysis", 
-            "correlate": "🔗 Event Correlation",
-            "clip": "✂️ Video Clipping",
-            "summary": "📊 Summary Generation"
+            "ingest": "Video Ingestion",
+            "analyze": "Video Analysis", 
+            "correlate": "Event Correlation",
+            "clip": "Video Clipping",
+            "summary": "Summary Generation"
         }
         return stage_names.get(stage, stage.title())
     

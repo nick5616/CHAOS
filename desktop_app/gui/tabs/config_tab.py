@@ -30,7 +30,7 @@ class ConfigTab(QWidget):
         layout = QVBoxLayout()
         
         # Title
-        title = QLabel("⚙️ Configuration")
+        title = QLabel("Configuration")
         title.setFont(QFont("Arial", 16, QFont.Weight.Bold))
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
@@ -67,7 +67,7 @@ class ConfigTab(QWidget):
         
     def create_paths_group(self):
         """Create the file paths configuration group."""
-        group = QGroupBox("📁 File Paths")
+        group = QGroupBox("File Paths")
         layout = QVBoxLayout()
         
         # Captures folder
@@ -108,7 +108,7 @@ class ConfigTab(QWidget):
         
     def create_players_group(self):
         """Create the player names configuration group."""
-        group = QGroupBox("👥 Player Names")
+        group = QGroupBox("Player Names")
         layout = QVBoxLayout()
         
         desc = QLabel("Enter your known in-game names (one per line):")
@@ -124,7 +124,7 @@ class ConfigTab(QWidget):
         
     def create_roi_group(self):
         """Create the ROI configuration group."""
-        group = QGroupBox("🎯 Region of Interest Configuration")
+        group = QGroupBox("Region of Interest Configuration")
         layout = QVBoxLayout()
         
         desc = QLabel("Configure regions of interest for killfeed and chat detection:")
@@ -143,15 +143,15 @@ class ConfigTab(QWidget):
         group = QGroupBox("Actions")
         layout = QHBoxLayout()
         
-        self.test_btn = QPushButton("🧪 Test Configuration")
+        self.test_btn = QPushButton("Test Configuration")
         self.test_btn.clicked.connect(self.test_configuration)
         layout.addWidget(self.test_btn)
         
-        self.save_btn = QPushButton("💾 Save Configuration")
+        self.save_btn = QPushButton("Save Configuration")
         self.save_btn.clicked.connect(self.save_configuration)
         layout.addWidget(self.save_btn)
         
-        self.reset_btn = QPushButton("🔄 Reset to Defaults")
+        self.reset_btn = QPushButton("Reset to Defaults")
         self.reset_btn.clicked.connect(self.reset_configuration)
         layout.addWidget(self.reset_btn)
         

@@ -1,6 +1,6 @@
 # CHAOS Desktop Application - Design Document
 
-## 📋 Table of Contents
+## Table of Contents
 
 1. [Overview](#overview)
 2. [Architecture](#architecture)
@@ -14,7 +14,7 @@
 
 ---
 
-## 🎯 Overview
+## Overview
 
 ### Purpose
 
@@ -36,7 +36,7 @@ Transform the CHAOS command-line tool into a user-friendly desktop application t
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
 ### Technology Stack
 
@@ -59,7 +59,7 @@ AI Models: EasyOCR + Whisper
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 CHAOS/
@@ -124,7 +124,7 @@ CHAOS/
 
 ---
 
-## 🚀 Core Features
+## Core Features
 
 ### 1. Setup Tab
 
@@ -212,7 +212,7 @@ CHAOS/
 
 ---
 
-## 🎨 UI Components
+## UI Components
 
 ### Main Window Layout
 
@@ -236,27 +236,27 @@ CHAOS/
 ┌─────────────────────────────────────────────────────────────┐
 │ Region of Interest Configuration                           │
 ├─────────────────────────────────────────────────────────────┤
-│ 📁 Video Source: [Auto-detect] [Browse...] 📹 demo_001.mp4 │
+│ Video Source: [Auto-detect] [Browse...] demo_001.mp4 │
 │                                                             │
-│ [⏮️] [⏸️] [⏭️] [🔍] [⏱️ 00:45.2 / 12:30.8] [🔊] [1x]      │
+│ [] [] [] [] [00:45.2 / 12:30.8] [] [1x]      │
 │                                                             │
 │ ┌─────────────────────────────────────────────────────────┐ │
 │ │ Video Frame (1920x1080) with ROI Overlays              │ │
 │ │ ┌─────────────────────────────────────────────────────┐ │ │
 │ │ │     ┌─── Killfeed ROI ───┐                         │ │ │
-│ │ │     │  🔴 Kill detected  │                         │ │ │
-│ │ │     │  🟠 T-side player  │                         │ │ │
+│ │ │     │  Kill detected  │                         │ │ │
+│ │ │     │  T-side player  │                         │ │ │
 │ │ │     └───────────────────┘                         │ │ │
 │ │ │                                                     │ │ │
 │ │ │  ┌─── Chat ROI ───┐                                │ │ │
-│ │ │  │ 🔥 Enemy rage  │                                │ │ │
-│ │ │  │ 🎉 Team hype   │                                │ │ │
+│ │ │  │ Enemy rage  │                                │ │ │
+│ │ │  │ Team hype   │                                │ │ │
 │ │ │  └───────────────┘                                │ │ │
 │ │ └─────────────────────────────────────────────────────┘ │ │
 │ └─────────────────────────────────────────────────────────┘ │
 │                                                             │
-│ ✅ Killfeed ROI: [1920, 40, 2550, 300] - Contains kills   │
-│ ✅ Chat ROI: [30, 1150, 650, 1300] - Contains chat        │
+│ Killfeed ROI: [1920, 40, 2550, 300] - Contains kills   │
+│ Chat ROI: [30, 1150, 650, 1300] - Contains chat        │
 │                                                             │
 │ [Reset ROI] [Test Detection] [Save Configuration]          │
 └─────────────────────────────────────────────────────────────┘
@@ -264,7 +264,7 @@ CHAOS/
 
 ---
 
-## 🛠️ Implementation Phases
+## Implementation Phases
 
 ### Phase 1: Foundation (Week 1-2)
 
@@ -340,7 +340,7 @@ CHAOS/
 
 ---
 
-## 🔧 Technical Specifications
+## Technical Specifications
 
 ### Dependencies
 
@@ -401,7 +401,7 @@ pipeline:
 
 ---
 
-## 🔌 API Interfaces
+## API Interfaces
 
 ### Configuration Manager
 
@@ -454,7 +454,7 @@ class VideoROIConfigurator(QWidget):
 
 ---
 
-## 🎯 Success Metrics
+## Success Metrics
 
 ### User Experience
 
@@ -479,7 +479,7 @@ class VideoROIConfigurator(QWidget):
 
 ---
 
-## 📝 Development Notes
+## Development Notes
 
 ### Code Organization
 
@@ -511,7 +511,7 @@ class VideoROIConfigurator(QWidget):
 
 ---
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Development Setup
 

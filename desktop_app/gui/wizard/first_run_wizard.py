@@ -369,7 +369,7 @@ class FirstRunWizard(QDialog):
         self._setup_status.setText(msg)
 
     def _on_setup_step(self, name: str, ok: bool):
-        icon = "✓" if ok else "✗"
+        icon = "" if ok else ""
         self._setup_log.append(f"  {icon}  {name}")
 
     def _on_setup_finished(self, success: bool):

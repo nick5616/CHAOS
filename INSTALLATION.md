@@ -1,6 +1,6 @@
 # CHAOS Desktop Application - Installation Guide
 
-## 🚀 Quick Installation
+## Quick Installation
 
 ### macOS/Linux
 ```bash
@@ -14,7 +14,7 @@
 install_chaos.bat
 ```
 
-## 📋 What the Installer Does
+## What the Installer Does
 
 1. **Creates Installation Directory**: `~/Applications/CHAOS/` (macOS/Linux) or `%USERPROFILE%\Applications\CHAOS\` (Windows)
 2. **Copies Application Files**: All necessary files from the source directory
@@ -24,7 +24,7 @@ install_chaos.bat
 6. **Optional Desktop Shortcut**: Creates a desktop shortcut for easy access
 7. **macOS App Bundle**: Creates a proper `.app` bundle for macOS
 
-## 🧪 Testing the Installation
+## Testing the Installation
 
 ### Test the Setup Process
 The installer creates a completely separate installation, so you can test the setup tab by:
@@ -40,7 +40,7 @@ The installer creates a completely separate installation, so you can test the se
 ./test_installation.sh
 ```
 
-## 📁 Installation Structure
+## Installation Structure
 
 ```
 ~/Applications/CHAOS/
@@ -54,7 +54,7 @@ The installer creates a completely separate installation, so you can test the se
 └── setup.sh               # Setup script
 ```
 
-## 🔧 Virtual Environment Benefits
+## Virtual Environment Benefits
 
 - **No Performance Impact**: Virtual environments are just directory structures
 - **Isolation**: Won't conflict with other Python applications
@@ -62,7 +62,7 @@ The installer creates a completely separate installation, so you can test the se
 - **Clean Uninstall**: Complete removal without affecting system
 - **Cross-platform**: Works identically on all operating systems
 
-## 🗑️ Uninstalling
+## Uninstalling
 
 ### Automatic Uninstall
 ```bash
@@ -82,7 +82,7 @@ rm ~/Desktop/CHAOS.desktop
 rm -rf ~/Applications/CHAOS.app
 ```
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
 ### Installation Fails
 - Ensure Python 3.8+ is installed
@@ -98,7 +98,7 @@ rm -rf ~/Applications/CHAOS.app
 - Reinstall: `~/Applications/CHAOS/uninstall.sh` then `./install_chaos.sh`
 - Manual fix: `cd ~/Applications/CHAOS && source venv/bin/activate && pip install -r requirements.txt`
 
-## 📦 Distribution
+## Distribution
 
 ### For End Users
 1. **Portable Package**: Zip the entire project directory
@@ -110,7 +110,7 @@ rm -rf ~/Applications/CHAOS.app
 2. **Setup**: `./setup.sh` (development setup)
 3. **Run**: `python run_desktop_app.py`
 
-## 🔄 Updates
+## Updates
 
 To update CHAOS:
 1. **Uninstall**: `~/Applications/CHAOS/uninstall.sh`

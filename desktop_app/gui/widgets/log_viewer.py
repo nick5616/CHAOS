@@ -25,7 +25,7 @@ class LogViewer(QWidget):
         # Header with controls
         header_layout = QHBoxLayout()
         
-        self.title_label = QLabel("📋 Pipeline Log")
+        self.title_label = QLabel("Pipeline Log")
         self.title_label.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         header_layout.addWidget(self.title_label)
         

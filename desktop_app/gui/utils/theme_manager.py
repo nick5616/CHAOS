@@ -465,17 +465,19 @@ class ThemeManager(QObject):
             font-size: 11px;
             letter-spacing: 1px;
             text-transform: uppercase;
-            border: 1px solid #2a2d35;
-            border-radius: 4px;
-            margin-top: 12px;
-            padding-top: 8px;
+            border: none;
+            border-top: 1px solid #2a2d35;
+            border-radius: 0px;
+            margin-top: 18px;
+            padding-top: 10px;
             color: #6b7280;
         }
 
         QGroupBox::title {
             subcontrol-origin: margin;
-            left: 10px;
-            padding: 0 6px;
+            left: 0px;
+            top: -2px;
+            padding: 0 0 0 0;
         }
 
         QPushButton {
@@ -557,7 +559,7 @@ class ThemeManager(QObject):
             border-radius: 4px;
             padding: 6px 10px;
             color: #6b7280;
-            font-size: 16px;
+            font-size: 13px;
             min-width: 0px;
         }
 

@@ -30,7 +30,7 @@ class ResultsTab(QWidget):
         layout = QVBoxLayout()
         
         # Title
-        title = QLabel("📊 Results & Clips")
+        title = QLabel("Results & Clips")
         title.setFont(QFont("Arial", 16, QFont.Weight.Bold))
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
@@ -38,15 +38,15 @@ class ResultsTab(QWidget):
         # Control buttons
         controls_layout = QHBoxLayout()
         
-        self.refresh_btn = QPushButton("🔄 Refresh")
+        self.refresh_btn = QPushButton("Refresh")
         self.refresh_btn.clicked.connect(self.load_results)
         controls_layout.addWidget(self.refresh_btn)
         
-        self.export_btn = QPushButton("📤 Export Selected")
+        self.export_btn = QPushButton("Export Selected")
         self.export_btn.clicked.connect(self.export_selected)
         controls_layout.addWidget(self.export_btn)
         
-        self.open_folder_btn = QPushButton("📁 Open Folder")
+        self.open_folder_btn = QPushButton("Open Folder")
         self.open_folder_btn.clicked.connect(self.open_clips_folder)
         controls_layout.addWidget(self.open_folder_btn)
         

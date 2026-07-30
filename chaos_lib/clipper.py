@@ -21,12 +21,20 @@ def _get_ffmpeg() -> str:
     raise FileNotFoundError("FFmpeg not found. Please ensure FFmpeg is installed and in your PATH.")
 
 
-def _clip_one(i: int, clip_data: dict, output_folder: str, ffmpeg_path: str) -> None:
+def _clip_one(i: int, clip_data: dict, output_folder: str, ffmpeg_path: str) -> str | None:
+    """Cut one clip and record its exact filename on clip_data['clip_filename'].
+
+    The `i` prefix only reflects the order clips were submitted in (streaming
+    pipelines submit as soon as each video finishes, not in final score
+    order), so it must never be re-derived later from list position — callers
+    that need to find this file again should read clip_data['clip_filename']
+    instead of reconstructing the name from a rank/index.
+    """
     source_video = clip_data['source_video']
     start_time = max(0, clip_data['clip_start'])
     duration = clip_data['clip_end'] - start_time
     if duration <= 0:
-        return
+        return None
 
     score = int(clip_data['score'])
     base_name = os.path.splitext(os.path.basename(source_video))[0]
@@ -41,14 +49,17 @@ def _clip_one(i: int, clip_data: dict, output_folder: str, ffmpeg_path: str) -> 
         output_filename = f"{i + 1}_{score}_{base_name[:20]}.mp4"
     output_path = os.path.join(output_folder, output_filename)
 
+    clip_data['clip_filename'] = output_filename
+
     if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-        return
+        return output_filename
 
     subprocess.run(
         [ffmpeg_path, '-y', '-ss', str(start_time), '-i', source_video,
          '-t', str(duration), '-c', 'copy', output_path],
         check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
+    return output_filename
 
 
 def run_clipping(config: dict, progress_callback=None):
@@ -83,5 +94,11 @@ def run_clipping(config: dict, progress_callback=None):
             print(f"  Clipped {i + 1}/{n}")
             if progress_callback:
                 progress_callback('clip', clip_data.get('source_video', ''), completed, n)
+
+    # _clip_one recorded the exact output filename on each clip_data dict —
+    # persist it so downstream tools (GUI, etc.) can look clips up by name
+    # instead of re-deriving it from list position.
+    with open(highlights_path, 'w') as f:
+        json.dump(highlights, f, indent=2)
 
     print("\nClipping complete.")

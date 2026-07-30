@@ -41,10 +41,10 @@ echo "Forcing Spotlight re-index..."
 mdimport /Applications/CHAOS.app
 
 echo ""
-echo "✅ Installation fixed!"
-echo "📱 CHAOS.app is now in /Applications/ (system folder)"
-echo "📁 CHAOS files remain in ~/Applications/CHAOS/ (user folder)"
-echo "🔍 Spotlight should now find 'CHAOS' when you search"
+echo "Installation fixed!"
+echo "CHAOS.app is now in /Applications/ (system folder)"
+echo "CHAOS files remain in ~/Applications/CHAOS/ (user folder)"
+echo "Spotlight should now find 'CHAOS' when you search"
 echo ""
 echo "You can now:"
 echo "  - Search for 'CHAOS' in Spotlight (Cmd+Space)"
@@ -55,7 +55,7 @@ echo ""
 # Test Spotlight
 echo "Testing Spotlight search..."
 if mdfind "kMDItemDisplayName == 'CHAOS'" | grep -q "CHAOS.app"; then
-    echo "✅ Spotlight can find the app!"
+    echo "Spotlight can find the app!"
 else
-    echo "⚠️  Spotlight might need a moment to index the app"
+    echo " Spotlight might need a moment to index the app"
 fi

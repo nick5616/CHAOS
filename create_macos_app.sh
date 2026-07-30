@@ -89,9 +89,9 @@ echo "Updating Spotlight index..."
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP_BUNDLE"
 
 echo ""
-echo "✅ macOS app bundle created successfully!"
-echo "📱 App bundle: $APP_BUNDLE"
-echo "🔍 Spotlight should now find 'CHAOS' when you search"
+echo "macOS app bundle created successfully!"
+echo "App bundle: $APP_BUNDLE"
+echo "Spotlight should now find 'CHAOS' when you search"
 echo ""
 echo "You can now:"
 echo "  - Search for 'CHAOS' in Spotlight"
@@ -102,8 +102,8 @@ echo ""
 # Test if Spotlight can find it
 echo "Testing Spotlight search..."
 if mdfind "kMDItemDisplayName == 'CHAOS'" | grep -q "CHAOS.app"; then
-    echo "✅ Spotlight can find the app!"
+    echo "Spotlight can find the app!"
 else
-    echo "⚠️  Spotlight might need a moment to index the app"
+    echo " Spotlight might need a moment to index the app"
     echo "   Try searching again in a few seconds"
 fi

@@ -1,4 +1,4 @@
-captures_folder: D:/Captures/Counter-strike 2
+captures_folder: D:/Captures/good clips
 data_folder: ./data
 final_clips_folder: ./final_clips
 player_names:
@@ -56,7 +56,7 @@ killfeed_rect_min_aspect_ratio: 8.0
 kill_memory_duration_seconds: 7.0
 ocr_frame_step: 30
 whisper_model: base
-clip_pre_buffer_seconds: 7
+clip_pre_buffer_seconds: 10
 clip_post_buffer_seconds: 6
 scoring_weights:
   kill: 10
@@ -68,8 +68,8 @@ scoring_weights:
   smoke_kill_bonus: 40
 gui:
   window_size:
-  - 998
-  - 778
+  - 1563
+  - 837
   theme: cs2
   auto_save: true
   setup_complete: true
@@ -79,6 +79,10 @@ system:
   ffmpeg_path: ffmpeg
   ffmpeg_available: true
   dependencies_installed: true
+  gpu_present: true
+  gpu_name: NVIDIA GeForce RTX 3070
+  nvidia_driver_version: '596.36'
+  nvidia_max_cuda_version: '13.2'
 roi:
   killfeed:
   - 1920

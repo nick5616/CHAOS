@@ -30,7 +30,7 @@ class PipelineTab(QWidget):
         layout = QVBoxLayout()
         
         # Title
-        title = QLabel("🚀 Pipeline Execution")
+        title = QLabel("Pipeline Execution")
         title.setFont(QFont("Arial", 16, QFont.Weight.Bold))
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
@@ -71,23 +71,23 @@ class PipelineTab(QWidget):
         # Stage checkboxes
         stages_layout = QHBoxLayout()
         
-        self.ingest_cb = QCheckBox("📁 Ingest")
+        self.ingest_cb = QCheckBox("Ingest")
         self.ingest_cb.setChecked(True)
         stages_layout.addWidget(self.ingest_cb)
         
-        self.analyze_cb = QCheckBox("🔍 Analyze")
+        self.analyze_cb = QCheckBox("Analyze")
         self.analyze_cb.setChecked(True)
         stages_layout.addWidget(self.analyze_cb)
         
-        self.correlate_cb = QCheckBox("🔗 Correlate")
+        self.correlate_cb = QCheckBox("Correlate")
         self.correlate_cb.setChecked(True)
         stages_layout.addWidget(self.correlate_cb)
         
-        self.clip_cb = QCheckBox("✂️ Clip")
+        self.clip_cb = QCheckBox("Clip")
         self.clip_cb.setChecked(True)
         stages_layout.addWidget(self.clip_cb)
         
-        self.summary_cb = QCheckBox("📊 Summary")
+        self.summary_cb = QCheckBox("Summary")
         self.summary_cb.setChecked(True)
         stages_layout.addWidget(self.summary_cb)
         
@@ -115,7 +115,7 @@ class PipelineTab(QWidget):
         group = QGroupBox("Pipeline Controls")
         layout = QHBoxLayout()
         
-        self.start_btn = QPushButton("🚀 Start Pipeline")
+        self.start_btn = QPushButton("Start Pipeline")
         self.start_btn.setStyleSheet("""
             QPushButton {
                 background-color: #4CAF50;
@@ -135,7 +135,7 @@ class PipelineTab(QWidget):
         self.start_btn.clicked.connect(self.start_pipeline)
         layout.addWidget(self.start_btn)
         
-        self.pause_btn = QPushButton("⏸️ Pause")
+        self.pause_btn = QPushButton("Pause")
         self.pause_btn.setEnabled(False)
         self.pause_btn.setStyleSheet("""
             QPushButton {
@@ -156,7 +156,7 @@ class PipelineTab(QWidget):
         self.pause_btn.clicked.connect(self.pause_pipeline)
         layout.addWidget(self.pause_btn)
         
-        self.stop_btn = QPushButton("⏹️ Stop")
+        self.stop_btn = QPushButton("Stop")
         self.stop_btn.setEnabled(False)
         self.stop_btn.setStyleSheet("""
             QPushButton {
@@ -177,7 +177,7 @@ class PipelineTab(QWidget):
         self.stop_btn.clicked.connect(self.stop_pipeline)
         layout.addWidget(self.stop_btn)
         
-        self.reset_btn = QPushButton("🔄 Reset")
+        self.reset_btn = QPushButton("Reset")
         self.reset_btn.clicked.connect(self.reset_pipeline)
         layout.addWidget(self.reset_btn)
         
@@ -273,12 +273,12 @@ class PipelineTab(QWidget):
         if self.pipeline_worker:
             if self.pipeline_worker.is_paused:
                 self.pipeline_worker.resume()
-                self.pause_btn.setText("⏸️ Pause")
+                self.pause_btn.setText("Pause")
                 self.status_label.setText("Running")
                 self.status_label.setStyleSheet("font-weight: bold; color: #4CAF50;")
             else:
                 self.pipeline_worker.pause()
-                self.pause_btn.setText("▶️ Resume")
+                self.pause_btn.setText("Resume")
                 self.status_label.setText("Paused")
                 self.status_label.setStyleSheet("font-weight: bold; color: #ff9800;")
                 
@@ -308,7 +308,7 @@ class PipelineTab(QWidget):
         
         self.start_btn.setEnabled(True)
         self.pause_btn.setEnabled(False)
-        self.pause_btn.setText("⏸️ Pause")
+        self.pause_btn.setText("Pause")
         self.stop_btn.setEnabled(False)
         self.status_label.setText("Ready")
         self.status_label.setStyleSheet("font-weight: bold; color: #666;")
@@ -344,7 +344,7 @@ class PipelineTab(QWidget):
         # Update UI
         self.start_btn.setEnabled(True)
         self.pause_btn.setEnabled(False)
-        self.pause_btn.setText("⏸️ Pause")
+        self.pause_btn.setText("Pause")
         self.stop_btn.setEnabled(False)
         
         if success:

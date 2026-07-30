@@ -150,7 +150,7 @@ class SetupTab(QWidget):
         layout = QVBoxLayout()
         
         # Title
-        title = QLabel("🔧 System Setup")
+        title = QLabel("System Setup")
         title.setFont(QFont("Arial", 16, QFont.Weight.Bold))
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
@@ -205,15 +205,15 @@ class SetupTab(QWidget):
         # Buttons
         button_layout = QHBoxLayout()
         
-        self.start_btn = QPushButton("🚀 Start Setup")
+        self.start_btn = QPushButton("Start Setup")
         self.start_btn.clicked.connect(self.start_setup)
         button_layout.addWidget(self.start_btn)
         
-        self.check_btn = QPushButton("🔍 Check System")
+        self.check_btn = QPushButton("Check System")
         self.check_btn.clicked.connect(self.check_system)
         button_layout.addWidget(self.check_btn)
         
-        self.refresh_btn = QPushButton("🔄 Refresh")
+        self.refresh_btn = QPushButton("Refresh")
         self.refresh_btn.clicked.connect(self.refresh_requirements)
         button_layout.addWidget(self.refresh_btn)
         
@@ -242,18 +242,18 @@ class SetupTab(QWidget):
             requirements_text = []
             requirements_text.append("=== SYSTEM INFORMATION ===")
             requirements_text.append(f"Platform: {system_info['platform']}")
-            requirements_text.append(f"Python: {python_version} {'✅' if python_ok else '❌'}")
+            requirements_text.append(f"Python: {python_version} {'OK' if python_ok else 'MISSING'}")
             
             if disk_info and 'free_gb' in disk_info:
                 requirements_text.append(f"Free Disk Space: {disk_info['free_gb']} GB")
             
             requirements_text.append("\n=== REQUIREMENTS CHECK ===")
-            requirements_text.append(f"Python 3.8+: {'✅' if python_ok else '❌'}")
-            requirements_text.append(f"FFmpeg: {'✅' if ffmpeg_ok else '❌'}")
+            requirements_text.append(f"Python 3.8+: {'OK' if python_ok else 'MISSING'}")
+            requirements_text.append(f"FFmpeg: {'OK' if ffmpeg_ok else 'MISSING'}")
             if not ffmpeg_ok:
                 requirements_text.append(f"  └─ {ffmpeg_info}")
-            
-            requirements_text.append(f"CUDA: {'✅' if cuda_info['available'] else '❌'}")
+
+            requirements_text.append(f"CUDA: {'OK' if cuda_info['available'] else 'MISSING'}")
             if cuda_info['available']:
                 requirements_text.append(f"  └─ Version: {cuda_info['version']}")
                 requirements_text.append(f"  └─ Device: {cuda_info['device_name']}")
@@ -261,7 +261,7 @@ class SetupTab(QWidget):
             requirements_text.append("\n=== DEPENDENCIES ===")
             missing_deps = []
             for dep, installed in dependencies.items():
-                status = "✅" if installed else "❌"
+                status = "OK" if installed else "MISSING"
                 requirements_text.append(f"{dep}: {status}")
                 if not installed:
                     missing_deps.append(dep)
@@ -309,7 +309,7 @@ class SetupTab(QWidget):
     
     def step_completed(self, step_name: str, success: bool):
         """Handle step completion."""
-        status = "✅" if success else "❌"
+        status = "OK" if success else "FAILED"
         current_text = self.requirements_list.toPlainText()
         
         # Update the requirements display with step results
@@ -327,14 +327,14 @@ class SetupTab(QWidget):
         self.start_btn.setEnabled(True)
         
         if success:
-            self.status_label.setText("✅ Setup completed successfully!")
+            self.status_label.setText("Setup completed successfully!")
             QMessageBox.information(
                 self, 
                 "Setup Complete", 
                 "System setup completed successfully!\n\nYou can now proceed to the Configure tab."
             )
         else:
-            self.status_label.setText("❌ Setup failed. Check the requirements above.")
+            self.status_label.setText("Setup failed. Check the requirements above.")
             QMessageBox.warning(
                 self, 
                 "Setup Failed", 

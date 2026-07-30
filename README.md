@@ -16,7 +16,7 @@ This project is the answer to that feeling.
 
 This repository documents my attempt to fight creative burnout with code, turning a terabyte of digital chaos into a curated library of meaningful highlights.
 
-## 🔧 Setup & Installation
+## Setup & Installation
 
 ### Automated Setup (Recommended)
 
@@ -44,7 +44,7 @@ install_ffmpeg.ps1
 
 CHAOS is designed to work on both **Windows (with NVIDIA GPUs)** and **macOS (with Apple Silicon)**. The setup scripts will automatically handle the platform-specific dependencies for you.
 
-### 🚀 Getting Started
+### Getting Started
 
 **1. Clone the Repository:**
 First, get the code onto your local machine.
@@ -70,7 +70,7 @@ chmod +x setup.sh
 
 After the script finishes, your environment is ready.
 
-### 🏃‍♀️ Usage
+### ‍Usage
 
 #### 1. Activate the Virtual Environment:
 
