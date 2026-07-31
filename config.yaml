@@ -1,23 +1,17 @@
-captures_folder: D:/Captures/good clips
+captures_folder: D:/Captures/Counter-strike 2
 data_folder: ./data
 final_clips_folder: ./final_clips
-player_names:
-- stingered by an WAS
-- marmalade sandwich
-- IZI KATKA
-- hot dog dog
-- excellent mage
-- pistol mage
+player_names: []
 killfeed_roi:
-- 1920
-- 40
-- 2550
-- 300
-chat_roi:
+- 1478
 - 30
-- 1150
-- 650
-- 1300
+- 1900
+- 250
+chat_roi:
+- 15
+- 840
+- 490
+- 1010
 red_hsv_lower1:
 - 0
 - 180
@@ -74,15 +68,15 @@ gui:
   auto_save: true
   setup_complete: true
 system:
-  cuda_available: false
+  cuda_available: true
   pytorch_version: cpu
   ffmpeg_path: ffmpeg
   ffmpeg_available: true
   dependencies_installed: true
   gpu_present: true
   gpu_name: NVIDIA GeForce RTX 3070
-  nvidia_driver_version: '596.36'
-  nvidia_max_cuda_version: '13.2'
+  nvidia_driver_version: null
+  nvidia_max_cuda_version: null
 roi:
   killfeed:
   - 1920

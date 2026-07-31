@@ -168,6 +168,22 @@ class FirstRunWizard(QDialog):
         self._setup_log.setPlaceholderText("Setup output will appear here…")
         layout.addWidget(self._setup_log)
 
+        self._gpu_banner = QFrame()
+        self._gpu_banner.setStyleSheet(
+            "QFrame { background: #2a1f0f; border: 1px solid #e8963c; border-radius: 4px; }"
+        )
+        gpu_banner_layout = QHBoxLayout(self._gpu_banner)
+        gpu_banner_layout.setContentsMargins(12, 8, 12, 8)
+        self._gpu_banner_lbl = QLabel("")
+        self._gpu_banner_lbl.setWordWrap(True)
+        self._gpu_banner_lbl.setStyleSheet("color: #e8963c; font-size: 12px; background: transparent;")
+        gpu_banner_layout.addWidget(self._gpu_banner_lbl, 1)
+        self._gpu_banner_btn = QPushButton("Enable CUDA…")
+        self._gpu_banner_btn.clicked.connect(self._show_gpu_dialog)
+        gpu_banner_layout.addWidget(self._gpu_banner_btn)
+        self._gpu_banner.setVisible(False)
+        layout.addWidget(self._gpu_banner)
+
         layout.addStretch()
         return page
 
@@ -358,9 +374,13 @@ class FirstRunWizard(QDialog):
         self._setup_status.setText("Starting setup…")
         self._setup_progress.setValue(0)
 
+        self._gpu_info = {}
+        self._gpu_banner.setVisible(False)
+
         self._worker = SetupWorker(install_ffmpeg=True, install_dependencies=True)
         self._worker.progress_updated.connect(self._on_setup_progress)
         self._worker.step_completed.connect(self._on_setup_step)
+        self._worker.gpu_info.connect(self._on_gpu_info)
         self._worker.finished.connect(self._on_setup_finished)
         self._worker.start()
 
@@ -371,6 +391,27 @@ class FirstRunWizard(QDialog):
     def _on_setup_step(self, name: str, ok: bool):
         icon = "" if ok else ""
         self._setup_log.append(f"  {icon}  {name}")
+
+    def _on_gpu_info(self, info: dict):
+        self._gpu_info = info
+        if info.get('gpu_present') and not info.get('available'):
+            name = info.get('gpu_name') or 'Your GPU'
+            self._gpu_banner_lbl.setText(
+                f"{name} detected. Enable CUDA for up to 8x faster analysis."
+            )
+            self._gpu_banner.setVisible(True)
+
+    def _show_gpu_dialog(self):
+        from desktop_app.gui.views.home_view import _HardwareInfoDialog
+
+        system = {
+            'cuda_available': self._gpu_info.get('available', False),
+            'gpu_present': self._gpu_info.get('gpu_present', False),
+            'gpu_name': self._gpu_info.get('gpu_name'),
+            'nvidia_driver_version': self._gpu_info.get('driver_version'),
+            'nvidia_max_cuda_version': self._gpu_info.get('max_cuda_version'),
+        }
+        _HardwareInfoDialog(system, self).exec()
 
     def _on_setup_finished(self, success: bool):
         self.setup_done = True

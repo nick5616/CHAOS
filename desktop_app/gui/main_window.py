@@ -16,7 +16,6 @@ from desktop_app.gui.utils.theme_manager import ThemeManager
 
 
 class _CudaCheckThread(QThread):
-    result = pyqtSignal(str, str)  # display text, css colour
     gpu_info = pyqtSignal(dict)    # full detection info, for persisting to config
 
     def run(self) -> None:
@@ -26,8 +25,6 @@ class _CudaCheckThread(QThread):
         try:
             import torch
             if torch.cuda.is_available():
-                txt = f"CUDA  {torch.cuda.get_device_name(0)}"
-                col = "#22c55e"
                 info['cuda_available'] = True
                 info['gpu_present'] = True
                 info['gpu_name'] = torch.cuda.get_device_name(0)
@@ -39,16 +36,8 @@ class _CudaCheckThread(QThread):
                 info['gpu_name'] = gpu.get('name')
                 info['driver_version'] = gpu.get('driver_version')
                 info['max_cuda_version'] = gpu.get('max_cuda_version')
-                if info['gpu_present']:
-                    txt = f"{info['gpu_name']} detected — CUDA disabled"
-                    col = "#e8963c"
-                else:
-                    txt = "CPU only"
-                    col = "#6b7280"
         except Exception:
-            txt = ""
-            col = ""
-        self.result.emit(txt, col)
+            pass
         self.gpu_info.emit(info)
 
 
@@ -72,7 +61,6 @@ class ChaosMainWindow(QMainWindow):
         self._check_setup_status()
 
         self._cuda_thread = _CudaCheckThread(self)
-        self._cuda_thread.result.connect(self._on_cuda_checked)
         self._cuda_thread.gpu_info.connect(self._on_gpu_info)
         self._cuda_thread.start()
 
@@ -147,8 +135,16 @@ class ChaosMainWindow(QMainWindow):
         wiz_layout.setContentsMargins(16, 0, 16, 0)
         wiz_layout.setSpacing(8)
 
-        self._cuda_lbl = QLabel("")
-        self._cuda_lbl.setStyleSheet("color: #6b7280; font-size: 10px; background: transparent;")
+        self._cuda_lbl = QPushButton("")
+        self._cuda_lbl.setFlat(True)
+        self._cuda_lbl.setEnabled(False)
+        self._cuda_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._cuda_lbl.setToolTip("Click for GPU acceleration details")
+        self._cuda_lbl.setStyleSheet(
+            "QPushButton { color: #6b7280; font-size: 10px; background: transparent; "
+            "border: none; text-align: left; padding: 0; }"
+        )
+        self._cuda_lbl.clicked.connect(self._show_hw_dialog)
         wiz_layout.addWidget(self._cuda_lbl)
 
         wiz_layout.addStretch()
@@ -283,13 +279,6 @@ class ChaosMainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ helpers
 
-    def _on_cuda_checked(self, txt: str, col: str) -> None:
-        if txt:
-            self._cuda_lbl.setText(txt)
-            self._cuda_lbl.setStyleSheet(
-                f"color: {col}; font-size: 10px; background: transparent;"
-            )
-
     def _on_gpu_info(self, info: dict) -> None:
         try:
             config = self.config_manager.load_config()
@@ -303,6 +292,33 @@ class ChaosMainWindow(QMainWindow):
         except Exception:
             pass
 
+        self._refresh_cuda_label()
+        self._cuda_lbl.setEnabled(True)
+        if self._run_view:
+            self._run_view.refresh_hw_badge()
+
+    def _refresh_cuda_label(self) -> None:
+        system = self.config_manager.load_config().get("system", {})
+        name = system.get("gpu_name") or "GPU"
+        if system.get("cuda_available"):
+            txt, col = f"CUDA  {name}", "#22c55e"
+        elif system.get("gpu_present"):
+            txt, col = f"{name} detected, CUDA disabled", "#e8963c"
+        else:
+            txt, col = "CPU only", "#6b7280"
+        self._cuda_lbl.setText(txt)
+        self._cuda_lbl.setStyleSheet(
+            f"QPushButton {{ color: {col}; font-size: 10px; background: transparent; "
+            "border: none; text-align: left; padding: 0; }"
+        )
+
+    def _show_hw_dialog(self) -> None:
+        from desktop_app.gui.views.home_view import _HardwareInfoDialog
+
+        system = self.config_manager.load_config().get("system", {})
+        dlg = _HardwareInfoDialog(system, self)
+        dlg.exec()
+        self._refresh_cuda_label()
         if self._run_view:
             self._run_view.refresh_hw_badge()
 

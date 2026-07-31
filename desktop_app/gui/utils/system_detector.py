@@ -192,7 +192,25 @@ class SystemDetector:
             # Driver too old for any currently-supported PyTorch CUDA build
             return "pip install torch torchvision torchaudio"
 
-        return f"pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/{tag}"
+        # --force-reinstall is required: if a CPU build is already installed, it
+        # already satisfies the bare "torch" requirement as far as pip is
+        # concerned, so a plain `pip install torch` against the CUDA index
+        # silently no-ops ("Requirement already satisfied") and exits 0 without
+        # installing anything.
+        #
+        # --no-deps is required too: without it, --force-reinstall also
+        # re-resolves torch/torchvision's pure-Python dependencies (e.g. numpy)
+        # to their latest allowed versions, which can silently break unrelated
+        # packages elsewhere in the environment that pin an upper bound (numba
+        # requires numpy <= 2.3; a plain reinstall pulled in numpy 2.4 and broke
+        # it). This path only ever runs when a CPU build of torch is already
+        # present (see the gpu_present-but-not-cuda_available check that gates
+        # this dialog), so its dependencies are already satisfied and safe to
+        # leave untouched.
+        return (
+            "pip install torch torchvision torchaudio "
+            f"--index-url https://download.pytorch.org/whl/{tag} --force-reinstall --no-deps"
+        )
     
     @staticmethod
     def check_dependencies() -> Dict[str, any]:

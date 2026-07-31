@@ -247,6 +247,16 @@ class ClipThumbnailGrid(QWidget):
     def has_clips(self) -> bool:
         return bool(self._cards)
 
+    def select_all(self) -> None:
+        for card in self._cards.values():
+            card.set_selected(True, emit=False)
+        self.selection_changed.emit()
+
+    def deselect_all(self) -> None:
+        for card in self._cards.values():
+            card.set_selected(False, emit=False)
+        self.selection_changed.emit()
+
 
 class ClipSourceView(QWidget):
     """Clip source selector: folder/file picker and player names."""
@@ -324,9 +334,18 @@ class ClipSourceView(QWidget):
         row.addWidget(browse_btn)
         layout.addLayout(row)
 
+        size_row = QHBoxLayout()
         self._folder_size_lbl = QLabel("")
         self._folder_size_lbl.setStyleSheet("color: #6b7280; font-size: 12px;")
-        layout.addWidget(self._folder_size_lbl)
+        size_row.addWidget(self._folder_size_lbl)
+        size_row.addStretch()
+
+        self._select_toggle_btn = QPushButton("Deselect all")
+        self._select_toggle_btn.setVisible(False)
+        self._select_toggle_btn.clicked.connect(self._on_select_toggle_clicked)
+        size_row.addWidget(self._select_toggle_btn)
+
+        layout.addLayout(size_row)
 
         self._thumb_grid = ClipThumbnailGrid()
         self._thumb_grid.selection_changed.connect(self._on_clip_selection_changed)
@@ -423,6 +442,8 @@ class ClipSourceView(QWidget):
         else:
             self._folder_size_lbl.setText("No video files found in folder")
             self._thumb_grid.load_paths([])
+        self._select_toggle_btn.setVisible(bool(count))
+        self._select_toggle_btn.setText("Deselect all")
 
     def _on_clip_selection_changed(self) -> None:
         selected = self._thumb_grid.get_selected_paths()
@@ -436,6 +457,13 @@ class ClipSourceView(QWidget):
             self._folder_size_lbl.setText(
                 f"{len(selected)} of {len(total)} clips selected  ·  {_fmt_size(size_bytes)}"
             )
+        self._select_toggle_btn.setText("Select all" if not selected else "Deselect all")
+
+    def _on_select_toggle_clicked(self) -> None:
+        if self._thumb_grid.get_selected_paths():
+            self._thumb_grid.deselect_all()
+        else:
+            self._thumb_grid.select_all()
 
     def _browse_folder(self):
         path = QFileDialog.getExistingDirectory(self, "Select clips folder")
@@ -518,7 +546,7 @@ class _HardwareInfoDialog(QDialog):
     def __init__(self, system: dict, parent=None):
         super().__init__(parent)
         self.setWindowTitle("GPU Acceleration")
-        self.setMinimumWidth(440)
+        self.setMinimumWidth(560)
         self._worker: "_CudaInstallWorker | None" = None
         self._command = ""
 
@@ -543,10 +571,10 @@ class _HardwareInfoDialog(QDialog):
             layout.addWidget(title)
 
             driver = system.get("nvidia_driver_version")
-            detail = f"Detected {gpu_name}"
+            detail = f"CHAOS found {gpu_name}"
             if driver:
                 detail += f" (driver {driver})"
-            detail += ", but PyTorch is currently running in CPU-only mode."
+            detail += ", but it isn't being used. The version of PyTorch currently installed is CPU-only."
             detail_lbl = QLabel(detail)
             detail_lbl.setWordWrap(True)
             detail_lbl.setStyleSheet("color: #9ca3af; font-size: 12px;")
@@ -556,18 +584,18 @@ class _HardwareInfoDialog(QDialog):
                 system.get("nvidia_max_cuda_version")
             )
 
-            cmd_lbl = QLabel("Required action — reinstall PyTorch with CUDA support:")
-            cmd_lbl.setStyleSheet("color: #6b7280; font-size: 11px;")
-            layout.addWidget(cmd_lbl)
+            install_intro = QLabel(
+                "Recommended: click the button below and CHAOS will download and install the "
+                "CUDA build of PyTorch for you (roughly 2 to 3 GB, can take a few minutes on a "
+                "typical connection). It replaces the CPU-only version currently installed."
+            )
+            install_intro.setWordWrap(True)
+            install_intro.setStyleSheet("color: #9ca3af; font-size: 12px;")
+            layout.addWidget(install_intro)
 
-            cmd_row = QHBoxLayout()
-            cmd_edit = QLineEdit(self._command)
-            cmd_edit.setReadOnly(True)
-            cmd_row.addWidget(cmd_edit)
-            copy_btn = QPushButton("Copy")
-            copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(self._command))
-            cmd_row.addWidget(copy_btn)
-            layout.addLayout(cmd_row)
+            self._install_btn = QPushButton("Install CUDA-enabled PyTorch")
+            self._install_btn.clicked.connect(self._start_install)
+            layout.addWidget(self._install_btn)
 
             self._log = QTextEdit()
             self._log.setReadOnly(True)
@@ -575,14 +603,32 @@ class _HardwareInfoDialog(QDialog):
             self._log.setVisible(False)
             layout.addWidget(self._log)
 
-            self._install_btn = QPushButton("Install CUDA-enabled PyTorch")
-            self._install_btn.clicked.connect(self._start_install)
-            layout.addWidget(self._install_btn)
-
             self._status_lbl = QLabel("")
             self._status_lbl.setWordWrap(True)
             self._status_lbl.setStyleSheet("color: #6b7280; font-size: 11px;")
+            self._status_lbl.setVisible(False)
             layout.addWidget(self._status_lbl)
+
+            self._restart_btn = QPushButton("Restart Now")
+            self._restart_btn.setVisible(False)
+            self._restart_btn.clicked.connect(self._restart_app)
+            layout.addWidget(self._restart_btn)
+
+            manual_lbl = QLabel("Prefer to do it yourself? Copy this command and run it in a terminal:")
+            manual_lbl.setWordWrap(True)
+            manual_lbl.setStyleSheet("color: #6b7280; font-size: 11px; margin-top: 6px;")
+            layout.addWidget(manual_lbl)
+
+            cmd_row = QHBoxLayout()
+            cmd_edit = QLineEdit(self._command)
+            cmd_edit.setReadOnly(True)
+            cmd_edit.setToolTip(self._command)
+            cmd_edit.setCursorPosition(0)
+            cmd_row.addWidget(cmd_edit)
+            copy_btn = QPushButton("Copy")
+            copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(self._command))
+            cmd_row.addWidget(copy_btn)
+            layout.addLayout(cmd_row)
 
         else:
             title = QLabel("No NVIDIA GPU detected")
@@ -605,7 +651,7 @@ class _HardwareInfoDialog(QDialog):
         self._close_btn.setEnabled(False)
         self._log.setVisible(True)
         self._log.clear()
-        self._status_lbl.setText("")
+        self._status_lbl.setVisible(False)
 
         self._worker = _CudaInstallWorker(self._command)
         self._worker.output.connect(self._log.append)
@@ -616,13 +662,26 @@ class _HardwareInfoDialog(QDialog):
         self._close_btn.setEnabled(True)
         if success:
             self._install_btn.setText("Installed")
-            self._status_lbl.setText("Done — restart CHAOS to start using CUDA acceleration.")
+            self._status_lbl.setText("Done. Restart CHAOS to start using CUDA acceleration.")
             self._status_lbl.setStyleSheet("color: #22c55e; font-size: 11px;")
+            self._status_lbl.setVisible(True)
+            self._restart_btn.setVisible(True)
         else:
             self._install_btn.setEnabled(True)
             self._install_btn.setText("Install CUDA-enabled PyTorch")
-            self._status_lbl.setText("Install failed — see log above, or run the command manually.")
+            self._status_lbl.setText("Install failed. See the log above, or run the command manually.")
             self._status_lbl.setStyleSheet("color: #f87171; font-size: 11px;")
+            self._status_lbl.setVisible(True)
+
+    def _restart_app(self) -> None:
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        repo_root = Path(__file__).resolve().parents[3]
+        launcher = repo_root / "run_desktop_app.py"
+        subprocess.Popen([sys.executable, str(launcher)], cwd=str(repo_root))
+        QApplication.instance().quit()
 
     def closeEvent(self, event) -> None:
         if self._worker and self._worker.isRunning():

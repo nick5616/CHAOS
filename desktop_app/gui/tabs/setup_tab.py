@@ -21,6 +21,7 @@ class SetupWorker(QThread):
     progress_updated = pyqtSignal(int, str)  # progress, status
     step_completed = pyqtSignal(str, bool)  # step_name, success
     finished = pyqtSignal(bool)  # overall_success
+    gpu_info = pyqtSignal(dict)  # merged CUDA/GPU detection, for wizard's "enable CUDA" offer
     
     def __init__(self, install_ffmpeg=False, install_dependencies=False):
         super().__init__()
@@ -57,7 +58,19 @@ class SetupWorker(QThread):
             self.progress_updated.emit(40, "Detecting CUDA...")
             cuda_info = SystemDetector.detect_cuda()
             cuda_ok = cuda_info['available']
+            if cuda_ok:
+                cuda_info['gpu_present'] = True
+                cuda_info['gpu_name'] = cuda_info.get('device_name')
+                cuda_info['driver_version'] = None
+                cuda_info['max_cuda_version'] = None
+            else:
+                gpu = SystemDetector.detect_nvidia_gpu()
+                cuda_info['gpu_present'] = gpu.get('present', False)
+                cuda_info['gpu_name'] = gpu.get('name')
+                cuda_info['driver_version'] = gpu.get('driver_version')
+                cuda_info['max_cuda_version'] = gpu.get('max_cuda_version')
             self.step_completed.emit("CUDA", cuda_ok)
+            self.gpu_info.emit(cuda_info)
             
             # Step 5: Check dependencies
             self.progress_updated.emit(50, "Checking dependencies...")
@@ -125,7 +138,11 @@ class SetupWorker(QThread):
             config['system']['cuda_available'] = cuda_info['available']
             config['system']['pytorch_version'] = 'cuda' if cuda_info['available'] else 'cpu'
             config['system']['dependencies_installed'] = deps_ok
-            
+            config['system']['gpu_present'] = cuda_info.get('gpu_present', False)
+            config['system']['gpu_name'] = cuda_info.get('gpu_name')
+            config['system']['nvidia_driver_version'] = cuda_info.get('driver_version')
+            config['system']['nvidia_max_cuda_version'] = cuda_info.get('max_cuda_version')
+
             if cuda_info['available']:
                 config['system']['cuda_version'] = cuda_info['version']
                 config['system']['cuda_device_count'] = cuda_info['device_count']
