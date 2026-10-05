@@ -17,10 +17,10 @@ from desktop_app.gui.tabs.advanced_tab import AdvancedTab
 
 # Same resolution presets as the wizard
 RESOLUTION_PRESETS = [
-    {"label": "1920×1080", "killfeed_roi": [1478, 30, 1900, 250], "chat_roi": [15, 840, 490, 1010]},
-    {"label": "2560×1440", "killfeed_roi": [1978, 40, 2540, 333], "chat_roi": [20, 1120, 655, 1345]},
-    {"label": "3440×1440", "killfeed_roi": [2618, 40, 3420, 333], "chat_roi": [20, 1120, 655, 1345]},
-    {"label": "2560×1080", "killfeed_roi": [2010, 30, 2540, 250], "chat_roi": [15, 840, 490, 1010]},
+    {"label": "1920×1080", "killfeed_roi": [1478, 30, 1900, 250], "chat_roi": [15, 840, 490, 1010], "resolution": [1920, 1080]},
+    {"label": "2560×1440", "killfeed_roi": [1978, 40, 2540, 333], "chat_roi": [20, 1120, 655, 1345], "resolution": [2560, 1440]},
+    {"label": "3440×1440", "killfeed_roi": [2618, 40, 3420, 333], "chat_roi": [20, 1120, 655, 1345], "resolution": [3440, 1440]},
+    {"label": "2560×1080", "killfeed_roi": [2010, 30, 2540, 250], "chat_roi": [15, 840, 490, 1010], "resolution": [2560, 1080]},
 ]
 
 
@@ -195,6 +195,11 @@ class SettingsModal(QDialog):
         for sp, val in zip(self._chat_spins, chat):
             sp.setValue(int(val))
 
+        # Whatever resolution the current killfeed_roi/chat_roi were
+        # calibrated at; only changes if the user clicks a quick-apply preset
+        # below, so hand-tuned values keep whatever they already had.
+        self._roi_resolution = config.get("killfeed_roi_resolution")
+
     def _save(self):
         config = self.config_manager.load_config()
 
@@ -207,6 +212,7 @@ class SettingsModal(QDialog):
 
         config["killfeed_roi"] = [sp.value() for sp in self._kf_spins]
         config["chat_roi"] = [sp.value() for sp in self._chat_spins]
+        config["killfeed_roi_resolution"] = self._roi_resolution
 
         self.config_manager.save_config(config)
         self.accept()
@@ -223,3 +229,4 @@ class SettingsModal(QDialog):
             sp.setValue(val)
         for sp, val in zip(self._chat_spins, preset["chat_roi"]):
             sp.setValue(val)
+        self._roi_resolution = preset["resolution"][:]

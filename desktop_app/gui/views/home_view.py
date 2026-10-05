@@ -49,12 +49,13 @@ from PyQt6.QtWidgets import (
     QRadioButton, QButtonGroup, QListWidget, QListWidgetItem,
     QStackedWidget, QFrame, QSizePolicy, QScrollArea, QGridLayout,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QThread, QTimer
-from PyQt6.QtGui import QPixmap, QImage
+from PyQt6.QtCore import Qt, pyqtSignal, QThread, QTimer, QRectF
+from PyQt6.QtGui import QPixmap, QImage, QPainter, QPen, QColor
 
 from desktop_app.gui.widgets.log_viewer import LogViewer
 from desktop_app.gui.widgets.animated_pipeline import AnimatedPipelineWidget
 from desktop_app.workers.pipeline_worker import PipelineWorker
+from chaos_lib.resources import plan_analysis_workers
 from desktop_app.gui.utils.config_manager import ConfigManager
 from desktop_app.gui.utils.system_detector import SystemDetector
 
@@ -109,24 +110,129 @@ class _ThumbnailWorker(QThread):
             return None
 
 
+class _HoverPreviewWorker(QThread):
+    """Plays an entire clip back at accelerated speed for a hover preview.
+
+    Uses grab()/retrieve() to skip frames cheaply (no decode) and only decodes
+    the sampled frame, sleeping one source-frame-interval between samples so
+    `step` frames of footage pass per real frame tick — i.e. `step`x speed.
+
+    Frames are emitted at a moderate resolution (not the tiny thumbnail size)
+    so the card can both render the small thumbnail and let the zoom panel
+    crop a magnified region out of the same frame with reasonable detail.
+    """
+
+    frame_ready = pyqtSignal(QImage)
+
+    _PREVIEW_MAX_W = 800
+
+    def __init__(self, path: str, speed: float = 10.0):
+        super().__init__()
+        self._path = path
+        self._speed = speed
+        self._stopped = False
+
+    def stop(self) -> None:
+        self._stopped = True
+
+    def run(self) -> None:
+        cap = cv2.VideoCapture(self._path)
+        if not cap.isOpened():
+            return
+        try:
+            fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+            total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            if total <= 0:
+                return
+            step = max(1, round(self._speed))
+            interval_ms = max(1, int(1000 / fps))
+
+            while not self._stopped:
+                idx = 0
+                while not self._stopped and idx < total:
+                    if not cap.grab():
+                        break
+                    if idx % step == 0:
+                        ret, frame = cap.retrieve()
+                        if ret:
+                            img = self._to_qimage(frame)
+                            if img is not None:
+                                self.frame_ready.emit(img)
+                        self.msleep(interval_ms)
+                    idx += 1
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  # loop while still hovered
+        finally:
+            cap.release()
+
+    def _to_qimage(self, frame) -> "QImage | None":
+        try:
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            h, w = rgb.shape[:2]
+            img = QImage(rgb.tobytes(), w, h, 3 * w, QImage.Format.Format_RGB888).copy()
+            if w > self._PREVIEW_MAX_W:
+                img = img.scaledToWidth(self._PREVIEW_MAX_W, Qt.TransformationMode.SmoothTransformation)
+            return img
+        except Exception:
+            return None
+
+
+class _ThumbLabel(QLabel):
+    """Thumbnail image label that can draw a bounding rectangle over the
+    region currently shown magnified in the zoom preview panel."""
+
+    def __init__(self):
+        super().__init__()
+        self._zoom_rect: "QRectF | None" = None
+
+    def set_zoom_rect(self, rect: "QRectF | None") -> None:
+        self._zoom_rect = rect
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        if self._zoom_rect is None:
+            return
+        painter = QPainter(self)
+        pen = QPen(QColor("#e8963c"))
+        pen.setWidth(2)
+        painter.setPen(pen)
+        painter.drawRect(self._zoom_rect)
+
+
 class _ThumbnailCard(QFrame):
-    """Single clip card: thumbnail image + filename. Click to toggle selection."""
+    """Single clip card: thumbnail image + filename. Click to toggle selection.
+
+    Hovering plays the whole clip back at 10x speed in place of the static
+    thumbnail; moving off restores the static frame.
+    """
 
     toggled = pyqtSignal(str, bool)  # path, selected
+    zoom_updated = pyqtSignal(QImage)  # magnified crop centered on the cursor
+    zoom_ended = pyqtSignal()  # mouse left the card; clear the zoom panel
+
+    _ZOOM_FACTOR = 4.0
+    _ZOOM_OUT_W = 320  # matches _ZoomPreviewPanel's default size 1:1, no label scaling needed
+    _ZOOM_OUT_H = 180
 
     def __init__(self, path: str, tw: int, th: int):
         super().__init__()
         self._path = path
         self._selected = True
+        self._tw, self._th = tw, th
+        self._thumb_pixmap: "QPixmap | None" = None
+        self._preview_worker: "_HoverPreviewWorker | None" = None
+        self._last_full_frame: "QImage | None" = None
+        self._rel_pos: "tuple[float, float] | None" = None
         self.setObjectName("thumbCard")
         self.setFixedWidth(tw + 8)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMouseTracking(True)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(3)
 
-        self._img = QLabel()
+        self._img = _ThumbLabel()
         self._img.setFixedSize(tw, th)
         self._img.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._img.setText("…")
@@ -149,7 +255,111 @@ class _ThumbnailCard(QFrame):
 
     def set_thumbnail(self, img: QImage) -> None:
         self._img.setText("")
-        self._img.setPixmap(QPixmap.fromImage(img))
+        self._thumb_pixmap = QPixmap.fromImage(img)
+        if self._preview_worker is None:
+            self._img.setPixmap(self._thumb_pixmap)
+
+    def enterEvent(self, event) -> None:
+        self._start_preview()
+        self._handle_hover_pos(self._pos_from_event(event))
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._stop_preview()
+        self._rel_pos = None
+        self._last_full_frame = None
+        self._img.set_zoom_rect(None)
+        self.zoom_ended.emit()
+        super().leaveEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        self._handle_hover_pos(self._pos_from_event(event))
+        super().mouseMoveEvent(event)
+
+    def stop_preview(self) -> None:
+        """Called by the grid before this card is torn down."""
+        self._stop_preview()
+
+    def _pos_from_event(self, event):
+        return self._img.mapFromGlobal(event.globalPosition().toPoint())
+
+    def _start_preview(self) -> None:
+        if self._preview_worker is not None or not os.path.isfile(self._path):
+            return
+        worker = _HoverPreviewWorker(self._path)
+        worker.frame_ready.connect(self._on_preview_frame)
+        self._preview_worker = worker
+        worker.start()
+
+    def _stop_preview(self) -> None:
+        # Stop and *wait* for the thread to fully exit (releasing its
+        # cv2.VideoCapture) before returning. Without this, rapidly hovering
+        # between cards piles up multiple decoder threads/handles on the same
+        # process (and can destroy a still-running QThread on GC), which is
+        # what was crashing the app after a few hovers.
+        worker = self._preview_worker
+        self._preview_worker = None
+        if worker is not None:
+            try:
+                worker.frame_ready.disconnect(self._on_preview_frame)
+            except TypeError:
+                pass
+            worker.stop()
+            worker.wait()
+        if self._thumb_pixmap is not None:
+            self._img.setPixmap(self._thumb_pixmap)
+        else:
+            self._img.setText("…")
+
+    def _on_preview_frame(self, img: QImage) -> None:
+        self._last_full_frame = img
+        thumb = img.scaled(
+            self._tw, self._th,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self._img.setPixmap(QPixmap.fromImage(thumb))
+        if self._rel_pos is not None:
+            self._emit_zoom()
+
+    def _handle_hover_pos(self, local_pos) -> None:
+        w, h = self._img.width(), self._img.height()
+        if w <= 0 or h <= 0:
+            return
+        rel_x = min(max(local_pos.x() / w, 0.0), 1.0)
+        rel_y = min(max(local_pos.y() / h, 0.0), 1.0)
+        self._rel_pos = (rel_x, rel_y)
+        self._update_overlay_rect()
+        self._emit_zoom()
+
+    def _update_overlay_rect(self) -> None:
+        if self._rel_pos is None:
+            self._img.set_zoom_rect(None)
+            return
+        rel_x, rel_y = self._rel_pos
+        w, h = float(self._tw), float(self._th)
+        rw, rh = w / self._ZOOM_FACTOR, h / self._ZOOM_FACTOR
+        x0 = min(max(rel_x * w - rw / 2, 0.0), w - rw)
+        y0 = min(max(rel_y * h - rh / 2, 0.0), h - rh)
+        self._img.set_zoom_rect(QRectF(x0, y0, rw, rh))
+
+    def _emit_zoom(self) -> None:
+        if self._last_full_frame is None or self._rel_pos is None:
+            return
+        rel_x, rel_y = self._rel_pos
+        fw, fh = float(self._last_full_frame.width()), float(self._last_full_frame.height())
+        if fw <= 0 or fh <= 0:
+            return
+        cw, ch = fw / self._ZOOM_FACTOR, fh / self._ZOOM_FACTOR
+        x0 = min(max(rel_x * fw - cw / 2, 0.0), fw - cw)
+        y0 = min(max(rel_y * fh - ch / 2, 0.0), fh - ch)
+        crop = self._last_full_frame.copy(int(x0), int(y0), int(cw), int(ch))
+        scaled = crop.scaled(
+            self._ZOOM_OUT_W, self._ZOOM_OUT_H,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self.zoom_updated.emit(scaled)
 
     def is_selected(self) -> bool:
         return self._selected
@@ -176,6 +386,8 @@ class ClipThumbnailGrid(QWidget):
     """Scrollable grid of video clip thumbnails. Clips start selected; click to deselect."""
 
     selection_changed = pyqtSignal()
+    zoom_updated = pyqtSignal(QImage)
+    zoom_ended = pyqtSignal()
 
     _COLS = 4
     _TW = 160
@@ -211,8 +423,11 @@ class ClipThumbnailGrid(QWidget):
 
         while self._grid_layout.count():
             item = self._grid_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+            widget = item.widget()
+            if widget:
+                if isinstance(widget, _ThumbnailCard):
+                    widget.stop_preview()
+                widget.deleteLater()
         self._cards.clear()
 
         if not paths:
@@ -222,6 +437,8 @@ class ClipThumbnailGrid(QWidget):
         for i, path in enumerate(paths):
             card = _ThumbnailCard(path, self._TW, self._TH)
             card.toggled.connect(self._on_card_toggled)
+            card.zoom_updated.connect(self.zoom_updated)
+            card.zoom_ended.connect(self.zoom_ended)
             self._grid_layout.addWidget(card, i // self._COLS, i % self._COLS)
             self._cards[path] = card
 
@@ -256,6 +473,34 @@ class ClipThumbnailGrid(QWidget):
         for card in self._cards.values():
             card.set_selected(False, emit=False)
         self.selection_changed.emit()
+
+
+class _ZoomPreviewPanel(QFrame):
+    """Right-side panel showing a magnified crop of whichever clip is hovered,
+    centered on the mouse position (see _ThumbnailCard._emit_zoom)."""
+
+    def __init__(self, width: int = 320, height: int = 180):
+        super().__init__()
+        self.setFixedSize(width, height)
+        self.setStyleSheet(
+            "QFrame { background: #0d0f14; border: 1px solid #2a2d35; border-radius: 4px; }"
+        )
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self._label = QLabel("Hover a clip to zoom in")
+        self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._label.setWordWrap(True)
+        self._label.setStyleSheet("color: #374151; font-size: 11px; border: none;")
+        layout.addWidget(self._label)
+
+    def set_image(self, img: QImage) -> None:
+        self._label.setText("")
+        self._label.setPixmap(QPixmap.fromImage(img))
+
+    def clear(self) -> None:
+        self._label.setPixmap(QPixmap())
+        self._label.setText("Hover a clip to zoom in")
 
 
 class ClipSourceView(QWidget):
@@ -347,9 +592,19 @@ class ClipSourceView(QWidget):
 
         layout.addLayout(size_row)
 
+        grid_row = QHBoxLayout()
+        grid_row.setSpacing(10)
+
         self._thumb_grid = ClipThumbnailGrid()
         self._thumb_grid.selection_changed.connect(self._on_clip_selection_changed)
-        layout.addWidget(self._thumb_grid, 1)
+        grid_row.addWidget(self._thumb_grid, 1)
+
+        self._zoom_panel = _ZoomPreviewPanel()
+        self._thumb_grid.zoom_updated.connect(self._zoom_panel.set_image)
+        self._thumb_grid.zoom_ended.connect(self._zoom_panel.clear)
+        grid_row.addWidget(self._zoom_panel, 0, Qt.AlignmentFlag.AlignTop)
+
+        layout.addLayout(grid_row, 1)
 
         return panel
 
@@ -854,8 +1109,18 @@ class RunView(QWidget):
         self._stop_btn = QPushButton("Stop")
         self._stop_btn.setEnabled(False)
         self._stop_btn.clicked.connect(self._stop_pipeline)
+        self._gaming_btn = QPushButton("🎮 I'm playing, go easy on my GPU")
+        self._gaming_btn.setCheckable(True)
+        self._gaming_btn.setToolTip(
+            "Throttle analysis so your game keeps its frame rate.\n"
+            "Drops to one worker at idle priority that rests most of the time.\n"
+            "Click again when you're done playing to go back to full speed."
+        )
+        self._gaming_btn.setStyleSheet("QPushButton:checked { color: #22c55e; border-color: #166534; }")
+        self._gaming_btn.toggled.connect(self._toggle_gaming)
         row.addWidget(self._pause_btn)
         row.addWidget(self._stop_btn)
+        row.addWidget(self._gaming_btn)
         row.addSpacing(16)
         self._elapsed_lbl = QLabel("")
         self._elapsed_lbl.setStyleSheet("color: #6b7280; font-size: 12px;")
@@ -908,9 +1173,10 @@ class RunView(QWidget):
         self._output_path_lbl.setText(cfg.get("final_clips_folder", "./final_clips"))
 
         nw = cfg.get("pipeline", {}).get("analysis_workers",
-             cfg.get("analysis_workers", 2))
-        self._worker_target = nw
-        self._workers_count_lbl.setText(str(nw))
+             cfg.get("analysis_workers", "auto"))
+        # None = auto: the worker sizes the pool from free VRAM/RAM at start.
+        self._worker_target = nw if isinstance(nw, int) and nw > 0 else None
+        self._workers_count_lbl.setText(str(self._worker_target or "auto"))
 
     # ------------------------------------------------------------------ hardware badge
 
@@ -954,13 +1220,21 @@ class RunView(QWidget):
 
     # ------------------------------------------------------------------ workers
 
+    def _plan(self):
+        return plan_analysis_workers(self.config_manager.load_config())
+
     def _dec_workers(self) -> None:
-        self._worker_target = max(1, self._worker_target - 1)
+        current = self._worker_target or self._plan().workers
+        self._worker_target = max(1, current - 1)
         self._workers_count_lbl.setText(str(self._worker_target))
 
     def _inc_workers(self) -> None:
-        self._worker_target += 1
-        self._workers_count_lbl.setText(str(self._worker_target))
+        plan = self._plan()
+        current = self._worker_target or plan.workers
+        # Past the plan's max the workers wouldn't fit in VRAM/RAM: back to auto.
+        self._worker_target = current + 1 if current < plan.max_workers else None
+        self._workers_count_lbl.setText(str(self._worker_target or "auto"))
+        self._workers_count_lbl.setToolTip(plan.summary)
 
     # ------------------------------------------------------------------ output folder
 
@@ -1031,7 +1305,10 @@ class RunView(QWidget):
             folder = self._source.get_folder()
             self._input_size_bytes, video_count = _folder_video_size(folder)
 
-        self._worker = PipelineWorker(stages=ALL_STAGES, file_list=file_list)
+        self._worker = PipelineWorker(stages=ALL_STAGES, file_list=file_list,
+                                      requested_workers=self._worker_target)
+        if self._gaming_btn.isChecked():
+            self._worker.set_gaming_mode(True)
 
         self._pipeline_widget.reset()
         self._pipeline_widget.set_video_count(video_count)
@@ -1051,7 +1328,7 @@ class RunView(QWidget):
         self._worker.error_occurred.connect(lambda e: self._log_viewer.add_message(e, "error"))
         self._worker.finished.connect(self._on_pipeline_done)
 
-        self._pipeline_widget.set_worker_target(self._worker_target)
+        self._pipeline_widget.set_worker_target(self._worker_target or 1)
         self._worker.workers_count_changed.connect(self._pipeline_widget.set_worker_target)
         self._pipeline_widget.workers_changed.connect(self._worker.set_target_workers)
 
@@ -1072,6 +1349,12 @@ class RunView(QWidget):
     def _stop_pipeline(self):
         if self._worker:
             self._worker.stop()
+
+    def _toggle_gaming(self, on: bool):
+        self._gaming_btn.setText("🎮 Playing: throttled (click when done)" if on
+                                 else "🎮 I'm playing, go easy on my GPU")
+        if self._worker:
+            self._worker.set_gaming_mode(on)
 
     def _on_pipeline_done(self, success: bool):
         self._set_running(False)

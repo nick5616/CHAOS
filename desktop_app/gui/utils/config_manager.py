@@ -36,6 +36,7 @@ class ConfigManager:
             # Analysis parameters
             "player_names": [],
             "killfeed_roi": [1920, 40, 2550, 300],
+            "killfeed_roi_resolution": [2560, 1440],  # resolution killfeed_roi/chat_roi were calibrated at
             "chat_roi": [30, 1150, 650, 1300],
             
             # Kill detection tuning
@@ -53,13 +54,11 @@ class ConfigManager:
             # Shape detection
             "killfeed_rect_min_height": 25,
             "killfeed_rect_max_height": 50,
-            "killfeed_rect_min_aspect_ratio": 8.0,
+            "killfeed_rect_min_aspect_ratio": 5.0,
             
-            # Deduplication
-            "kill_memory_duration_seconds": 7.0,
-            
-            # General analysis
-            "ocr_frame_step": 30,
+            # General analysis. CS2 keeps the player's killfeed rows up for
+            # 7.5 s, so sampling every 2.5 s sees each kill about three times.
+            "killfeed_sample_interval_seconds": 2.5,
             "whisper_model": "base",
             
             # Correlation & scoring
@@ -101,7 +100,8 @@ class ConfigManager:
             "pipeline": {
                 "auto_start": False,
                 "show_logs": True,
-                "save_debug": False
+                "save_debug": False,
+                "analysis_workers": "auto"  # sized from free VRAM/RAM at start (chaos_lib/resources.py)
             }
         }
     

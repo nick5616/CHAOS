@@ -22,21 +22,25 @@ RESOLUTION_PRESETS = [
         "label": "1920 × 1080  (Full HD)",
         "killfeed_roi": [1478, 30, 1900, 250],
         "chat_roi": [15, 840, 490, 1010],
+        "resolution": [1920, 1080],
     },
     {
         "label": "2560 × 1440  (QHD / 1440p)",
         "killfeed_roi": [1978, 40, 2540, 333],
         "chat_roi": [20, 1120, 655, 1345],
+        "resolution": [2560, 1440],
     },
     {
         "label": "3440 × 1440  (Ultrawide)",
         "killfeed_roi": [2618, 40, 3420, 333],
         "chat_roi": [20, 1120, 655, 1345],
+        "resolution": [3440, 1440],
     },
     {
         "label": "2560 × 1080  (Ultrawide FHD)",
         "killfeed_roi": [2010, 30, 2540, 250],
         "chat_roi": [15, 840, 490, 1010],
+        "resolution": [2560, 1080],
     },
 ]
 
@@ -56,6 +60,7 @@ class FirstRunWizard(QDialog):
         self._player_names = []
         self._killfeed_roi = RESOLUTION_PRESETS[0]["killfeed_roi"][:]
         self._chat_roi = RESOLUTION_PRESETS[0]["chat_roi"][:]
+        self._killfeed_roi_resolution = RESOLUTION_PRESETS[0]["resolution"][:]
 
         self.setWindowTitle("CHAOS — First-Time Setup")
         self.setFixedSize(680, 520)
@@ -458,6 +463,7 @@ class FirstRunWizard(QDialog):
     def _on_preset_selected(self, index: int):
         self._killfeed_roi = RESOLUTION_PRESETS[index]["killfeed_roi"][:]
         self._chat_roi = RESOLUTION_PRESETS[index]["chat_roi"][:]
+        self._killfeed_roi_resolution = RESOLUTION_PRESETS[index]["resolution"][:]
         self._custom_box.setVisible(False)
 
     def _on_custom_toggled(self, checked: bool):
@@ -468,6 +474,9 @@ class FirstRunWizard(QDialog):
     def _read_custom_rois(self):
         self._killfeed_roi = [sp.value() for sp in self._kf_spins]
         self._chat_roi = [sp.value() for sp in self._chat_spins]
+        # Custom values are entered against the user's own footage, so use
+        # them as-is with no resolution-based rescaling.
+        self._killfeed_roi_resolution = None
 
     # -------------------------------------------------------- finish
 
@@ -477,6 +486,7 @@ class FirstRunWizard(QDialog):
         config["player_names"] = self._player_names
         config["killfeed_roi"] = self._killfeed_roi
         config["chat_roi"] = self._chat_roi
+        config["killfeed_roi_resolution"] = self._killfeed_roi_resolution
         if "gui" not in config:
             config["gui"] = {}
         config["gui"]["setup_complete"] = True

@@ -1,12 +1,17 @@
 captures_folder: D:/Captures/Counter-strike 2
 data_folder: ./data
 final_clips_folder: ./final_clips
-player_names: []
+player_names:
+- hot dog dog
+- the shadow leader
 killfeed_roi:
 - 1478
 - 30
 - 1900
 - 250
+killfeed_roi_resolution:
+- 1920
+- 1080
 chat_roi:
 - 15
 - 840
@@ -46,9 +51,8 @@ ct_blue_hsv_upper:
 - 255
 killfeed_rect_min_height: 25
 killfeed_rect_max_height: 50
-killfeed_rect_min_aspect_ratio: 8.0
-kill_memory_duration_seconds: 7.0
-ocr_frame_step: 30
+killfeed_rect_min_aspect_ratio: 5.0
+killfeed_sample_interval_seconds: 2.5
 whisper_model: base
 clip_pre_buffer_seconds: 10
 clip_post_buffer_seconds: 6
@@ -62,7 +66,7 @@ scoring_weights:
   smoke_kill_bonus: 40
 gui:
   window_size:
-  - 1563
+  - 1096
   - 837
   theme: cs2
   auto_save: true
@@ -93,5 +97,5 @@ pipeline:
   auto_start: false
   show_logs: true
   save_debug: false
-  analysis_workers: 2
+  analysis_workers: auto
   clip_workers: 4

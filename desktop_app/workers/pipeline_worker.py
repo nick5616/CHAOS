@@ -16,9 +16,9 @@ videos skip straight to correlate+clip.
 import sys
 import os
 import json
-import time
+import multiprocessing
 from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from pathlib import Path
 from threading import Lock
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -28,6 +28,7 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from chaos_lib import ingestion, analyzers, correlator, clipper, summary
+from chaos_lib.resources import plan_analysis_workers
 from desktop_app.gui.utils.config_manager import ConfigManager
 
 
@@ -50,17 +51,21 @@ class PipelineWorker(QThread):
     workers_count_changed = pyqtSignal(int)        # actual n_analyze after GPU check
     # --------------------------------------------------------------------
 
-    def __init__(self, stages: List[str], config_path: str = None, file_list: List[str] = None):
+    def __init__(self, stages: List[str], config_path: str = None, file_list: List[str] = None,
+                 requested_workers=None):
         super().__init__()
         self.stages = stages
         self.config_path = config_path or str(project_root / "config.yaml")
         self.config_manager = ConfigManager(self.config_path)
         self.file_list = file_list
+        self.requested_workers = requested_workers  # None → from config ("auto" = as many as fit)
         self.is_paused = False
         self.should_stop = False
-        self._ocr = None
-        self._whisper_model = None
-        self._target_workers: int = 4  # adjusted at runtime via set_target_workers
+        self._target_workers: int = 1  # adjusted at runtime via set_target_workers
+        self._max_workers: int = 1     # pool size from the resource plan
+        # Shared with every analysis process: set while the user is playing.
+        self._gaming_event = multiprocessing.get_context('spawn').Event()
+        self._workers_before_gaming: int | None = None
 
     # ------------------------------------------------------------------ run
 
@@ -152,25 +157,24 @@ class PipelineWorker(QThread):
         Fault tolerance: on restart, videos with cached events skip analysis;
         videos with a .clipped marker are counted immediately and skipped.
         """
-        try:
-            import torch
-            use_gpu = torch.cuda.is_available()
-            if use_gpu:
-                self.log_message.emit(f"GPU: {torch.cuda.get_device_name(0)}")
-        except ImportError:
-            use_gpu = False
-
         _pipe = config.get('pipeline', {})
-        n_analyze = (
-            1 if use_gpu
-            else max(1, _pipe.get('analysis_workers',
-                                  config.get('analysis_workers', min(4, os.cpu_count() or 1))))
-        )
+        requested = self.requested_workers
+        if requested is None:
+            requested = _pipe.get('analysis_workers', config.get('analysis_workers'))
+        # Each analysis worker is its own process with its own OCR + Whisper
+        # models; the plan sizes the pool from the models' measured memory cost
+        # and this machine's free VRAM (or RAM/cores without CUDA).
+        plan = plan_analysis_workers(config, requested, n_videos=len(video_paths))
+        self._max_workers = plan.max_workers
+        n_analyze = plan.workers
+        if self._gaming_event.is_set():
+            self._workers_before_gaming = n_analyze
+            n_analyze = 1
         n_clip = max(1, _pipe.get('clip_workers',
                                   config.get('clip_workers', min(4, os.cpu_count() or 1))))
 
-        mode = "GPU (single worker)" if use_gpu else f"{n_analyze} CPU workers"
-        self.log_message.emit(f"Analyze: {mode}  |  Clip: {n_clip} workers")
+        self.log_message.emit(plan.summary)
+        self.log_message.emit(f"Clip: {n_clip} workers")
 
         ffmpeg = clipper._get_ffmpeg()
         out_folder = config['final_clips_folder']
@@ -244,75 +248,62 @@ class PipelineWorker(QThread):
                 )
 
             if not self.should_stop and needs_analysis:
-                if n_analyze == 1:
-                    self._load_inline_models(config, use_gpu)
-                    for path in needs_analysis:
-                        if self.should_stop:
-                            break
-                        self._handle_video(
-                            path, config, use_gpu,
-                            all_events, all_highlights,
-                            clip_pool, clip_futures, clip_counter, clip_lock,
-                            pending_clips, completed, n_total, ffmpeg, out_folder,
-                            video_events_dir,
-                        )
-                else:
-                    # Pool ceiling: workers beyond n_analyze are idle until user
-                    # increments the stepper, then tasks start immediately.
-                    _pool_cap = min(os.cpu_count() or 4, 8)
-                    with ProcessPoolExecutor(
-                        max_workers=_pool_cap,
-                        initializer=analyzers._init_analysis_worker,
-                        initargs=(config['whisper_model'],),
-                    ) as analyze_pool:
+                # The pool holds up to plan.max_workers processes, spawned on
+                # demand: only _target_workers videos are in flight, and the
+                # stepper can raise that live up to what fits in memory.
+                analyze_pool_cm = analyzers.make_analysis_pool(config, plan, self._gaming_event)
+                submit_task = lambda path: analyze_pool_cm.submit(
+                    analyzers._analyze_video_worker, path, config)
 
-                        pending_queue = list(needs_analysis)
-                        in_flight: dict = {}
+                with analyze_pool_cm:
 
-                        def _submit_next():
-                            if pending_queue and not self.should_stop:
-                                path = pending_queue.pop(0)
-                                name = os.path.basename(path)
-                                self.job_started.emit(name, 'analyze')
-                                f = analyze_pool.submit(analyzers._analyze_video_worker, path, config)
-                                in_flight[f] = path
+                    pending_queue = list(needs_analysis)
+                    in_flight: dict = {}
 
-                        self._target_workers = n_analyze
-                        self.workers_count_changed.emit(n_analyze)
+                    def _submit_next():
+                        if pending_queue and not self.should_stop:
+                            path = pending_queue.pop(0)
+                            name = os.path.basename(path)
+                            self.job_started.emit(name, 'analyze')
+                            f = submit_task(path)
+                            in_flight[f] = path
 
-                        def _maybe_submit():
-                            while (len(in_flight) < self._target_workers
-                                   and pending_queue
-                                   and not self.should_stop):
-                                _submit_next()
+                    self._target_workers = n_analyze
+                    self.workers_count_changed.emit(n_analyze)
 
-                        _maybe_submit()
+                    def _maybe_submit():
+                        while (len(in_flight) < self._target_workers
+                               and pending_queue
+                               and not self.should_stop):
+                            _submit_next()
 
-                        while in_flight:
-                            # Short timeout so a + press takes effect in ≤100 ms
-                            done_set, _ = wait(set(in_flight), return_when=FIRST_COMPLETED,
-                                               timeout=0.1)
-                            _maybe_submit()  # picks up any target increase immediately
-                            for future in done_set:
-                                path = in_flight.pop(future)
-                                name = os.path.basename(path)
-                                try:
-                                    events = future.result()
-                                except Exception as e:
-                                    self.log_message.emit(f"Analyze failed {name}: {e}")
-                                    self.job_finished.emit(name, False)
-                                    _maybe_submit()
-                                    continue
+                    _maybe_submit()
 
-                                all_events.extend(events)
-                                self._after_analyze(
-                                    path, name, events, config,
-                                    all_highlights,
-                                    clip_pool, clip_futures, clip_counter, clip_lock,
-                                    pending_clips, completed, n_total, ffmpeg, out_folder,
-                                    video_events_dir,
-                                )
+                    while in_flight:
+                        # Short timeout so a + press takes effect in ≤100 ms
+                        done_set, _ = wait(set(in_flight), return_when=FIRST_COMPLETED,
+                                           timeout=0.1)
+                        _maybe_submit()  # picks up any target increase immediately
+                        for future in done_set:
+                            path = in_flight.pop(future)
+                            name = os.path.basename(path)
+                            try:
+                                events = future.result()
+                            except Exception as e:
+                                self.log_message.emit(f"Analyze failed {name}: {e}")
+                                self.job_finished.emit(name, False)
                                 _maybe_submit()
+                                continue
+
+                            all_events.extend(events)
+                            self._after_analyze(
+                                path, name, events, config,
+                                all_highlights,
+                                clip_pool, clip_futures, clip_counter, clip_lock,
+                                pending_clips, completed, n_total, ffmpeg, out_folder,
+                                video_events_dir,
+                            )
+                            _maybe_submit()
 
             # Wait for all clip futures — callbacks handle job_finished/pipeline_count
             if clip_futures:
@@ -328,47 +319,6 @@ class PipelineWorker(QThread):
         return all_events, all_highlights
 
     # ------------------------------------------------------------------ helpers
-
-    def _load_inline_models(self, config: dict, use_gpu: bool) -> None:
-        """Load OCR + Whisper into this thread (GPU / single-worker path)."""
-        import easyocr
-        import platform
-        import whisper as _whisper
-        self.log_message.emit("Loading AI models…")
-        if platform.system() == 'Darwin' and use_gpu:
-            self._ocr = easyocr.Reader(['en'], gpu=False)
-        else:
-            self._ocr = easyocr.Reader(['en'], gpu=use_gpu)
-        device = 'cuda' if use_gpu else 'cpu'
-        self._whisper_model = _whisper.load_model(config['whisper_model'], device=device)
-        self.log_message.emit("AI models ready")
-
-    def _handle_video(self, path, config, use_gpu,
-                      all_events, all_highlights,
-                      clip_pool, clip_futures, clip_counter, clip_lock,
-                      pending_clips, completed, n_total, ffmpeg, out_folder,
-                      video_events_dir=None):
-        """Sequential path: analyze inline then hand off."""
-        name = os.path.basename(path)
-        self.job_started.emit(name, 'analyze')
-        try:
-            temp_dir = os.path.join(config['data_folder'], 'temp_audio')
-            kills = analyzers.analyze_killfeed(path, config, self._ocr)
-            voice, spikes = analyzers.analyze_audio(path, self._whisper_model, temp_dir)
-            events = kills + spikes + voice
-        except Exception as e:
-            self.log_message.emit(f"Analyze failed {name}: {e}")
-            self.job_finished.emit(name, False)
-            return
-
-        all_events.extend(events)
-        self._after_analyze(
-            path, name, events, config,
-            all_highlights,
-            clip_pool, clip_futures, clip_counter, clip_lock,
-            pending_clips, completed, n_total, ffmpeg, out_folder,
-            video_events_dir,
-        )
 
     def _after_analyze(self, path, name, events, config,
                        all_highlights,
@@ -444,9 +394,35 @@ class PipelineWorker(QThread):
     # ------------------------------------------------------------------ control
 
     def set_target_workers(self, n: int) -> None:
-        """Adjust analysis concurrency live. Excess in-flight jobs finish naturally."""
-        self._target_workers = max(1, n)
+        """Adjust analysis concurrency live, up to what the resource plan says
+        fits. Excess in-flight jobs finish naturally."""
+        clamped = max(1, min(n, self._max_workers))
+        if self._gaming_event.is_set():
+            # Remember the choice for when gaming mode ends; stay at one meanwhile.
+            self._workers_before_gaming = clamped
+            clamped = 1
+        self._target_workers = clamped
+        if clamped != n:
+            self.workers_count_changed.emit(clamped)
         self.log_message.emit(f"Analysis workers → {self._target_workers}")
+
+    def set_gaming_mode(self, on: bool) -> None:
+        """Throttle while the user plays: one analysis worker, idle CPU
+        priority, and each worker sleeps ~3x as long as it works so the GPU
+        and CPU stay mostly free for the game. In-flight work continues,
+        throttled, rather than being cancelled."""
+        if on == self._gaming_event.is_set():
+            return
+        if on:
+            self._workers_before_gaming = self._target_workers
+            self._gaming_event.set()
+            self._target_workers = 1
+            self.log_message.emit("Gaming mode on: analysis throttled to 1 worker at low priority")
+        else:
+            self._gaming_event.clear()
+            self._target_workers = max(1, min(self._workers_before_gaming or 1, self._max_workers))
+            self.log_message.emit(f"Gaming mode off: back to {self._target_workers} workers")
+        self.workers_count_changed.emit(self._target_workers)
 
     def pause(self):
         self.is_paused = True

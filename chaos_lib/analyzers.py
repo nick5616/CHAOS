@@ -1,13 +1,12 @@
 # === FILE: chaos_lib/analyzers.py ===
 import os
 import json
+import time
 import cv2
 import whisper
 import librosa
 import numpy as np
-import subprocess
 import shutil
-from tqdm import tqdm
 from thefuzz import fuzz
 
 def scale_roi_for_resolution(roi_coords, video_width, video_height, reference_width=2560, reference_height=1440):
@@ -50,7 +49,6 @@ def scale_roi_for_resolution(roi_coords, video_width, video_height, reference_wi
     
     return [scaled_x1, scaled_y1, scaled_x2, scaled_y2]
 
-# (Helper functions _save_debug_screenshot and _extract_audio remain the same)
 def _save_debug_screenshot(config: dict, image, video_path: str, event_type: str, timestamp: float, suffix: str = ""):
     if not config.get('debug_mode', False): return
     debug_folder = os.path.join(config['data_folder'], 'debug_screenshots')
@@ -60,14 +58,6 @@ def _save_debug_screenshot(config: dict, image, video_path: str, event_type: str
     filename = f"{event_type}_{time_str}_{base_name}{suffix}.png"
     filepath = os.path.join(debug_folder, filename)
     cv2.imwrite(filepath, image)
-
-def _extract_audio(video_path: str, temp_dir: str) -> str:
-    os.makedirs(temp_dir, exist_ok=True)
-    audio_filename = os.path.splitext(os.path.basename(video_path))[0] + ".wav"
-    output_path = os.path.join(temp_dir, audio_filename)
-    command = ['ffmpeg', '-y', '-i', video_path, '-vn', '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1', output_path]
-    subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return output_path
 
 # --- ICON DETECTION FUNCTIONS ---
 def _detect_headshot_icon(image_region):
@@ -149,20 +139,34 @@ def _detect_smoke_icon(image_region):
     return smoke_icons_found == 1
 
 # --- FINAL, ROBUST PARSING & IDENTIFICATION LOGIC ---
-def _parse_and_identify_kill(text: str) -> dict | None:
+def _parse_and_identify_kill(text: str, player_names=()) -> dict | None:
     """
     Parses a raw OCR string from the killfeed to extract all relevant details.
-    Since we're using red rectangle detection, any detected kill is valid.
+
+    CS2 draws the red border on every row involving the local player: their
+    kills, but also their deaths and assists. A row starting with one of the
+    player's names is their kill; a row with their name elsewhere is a death
+    or assist. A row with none of their names (no names configured, or they
+    played under a name not in the list) falls back to trusting the border.
     """
-    # Parse out the victim and assister
-    victim = "Unknown"
     assister = None
     parts = text.split()
     if len(parts) < 2:
         return None # Not a valid line
-    
-    # Victim is always the last word
+
     victim = parts[-1]
+    is_player_kill = True
+    lowered = text.lower()
+    for name in player_names:
+        name = name.lower()
+        if fuzz.ratio(lowered[:len(name)], name) >= 80:
+            is_player_kill = True
+            # Everything after the player's name: the victim (plus any
+            # assister). Multi-word names like "Spike Spiegel" stay whole.
+            victim = text[len(name):].strip() or victim
+            break
+        if fuzz.partial_ratio(name, lowered) >= 85:
+            is_player_kill = False  # their name, but not as the killer
 
     # Check for an assist
     if '+' in parts:
@@ -186,156 +190,324 @@ def _parse_and_identify_kill(text: str) -> dict | None:
         "killer": detected_player,
         "assister": assister,
         "victim": victim,
-        "is_player_kill": True,  # Always True since red rectangle detection is sufficient
+        "is_player_kill": is_player_kill,
         "raw_text": text
     }
 
-def _find_fuzzy_victim(victim: str, active_kills: dict, threshold: int = 75) -> str | None:
-    """Return the matching key in active_kills if one is fuzzy-similar enough, else None."""
+def _name_key(name: str) -> str:
+    return ''.join(ch for ch in name.lower() if ch.isalnum())
+
+
+def _find_fuzzy_victim(victim: str, active_kills: dict, threshold: int = 85) -> str | None:
+    """Return the matching key in active_kills if one is fuzzy-similar enough, else None.
+
+    Compared on letters and digits only, so OCR punctuation noise ("se." vs
+    "se _") doesn't matter. The threshold is high because victims carry shared
+    prefixes like "BOT ": "BOT Mayer" vs "BOT Maru" scores 80 and must not merge."""
+    key = _name_key(victim)
     for known in active_kills:
-        if fuzz.ratio(victim.lower(), known.lower()) >= threshold:
+        if fuzz.ratio(key, _name_key(known)) >= threshold:
             return known
     return None
 
-def analyze_killfeed(video_path: str, config: dict, reader) -> list:
-    kill_events = []
+# --- KILLFEED ---------------------------------------------------------------
+#
+# CS2 death notices (huddeathnotice.xml/.css): a row involving the local player
+# (the red-bordered rows we look for) stays on screen for 7.5 s, other rows for
+# 5 s, then fades out over 1 s. So we don't need to look at every 30th frame:
+# sampling every ~2.5 s still sees each of our kills about three times, which
+# leaves slack for an OCR miss or the fade-out.
+#
+# Each row is fingerprinted from its pixels (_row_signature), so on later
+# samples a row we already know about is recognised without running OCR on it
+# again. OCR, the expensive step, only runs on rows we haven't seen before.
+# Because a sample only tells us a kill happened sometime since the previous
+# sample, we binary-search the frames in between for the moment the row first
+# appeared, which pins the kill time to within ~0.15 s for a handful of extra
+# frame decodes (no OCR).
 
-    # --- STATE MACHINE: Stores victims currently on screen to prevent duplicates ---
-    active_kills = {} # Format: { "victim_name": {"first_seen": timestamp} }
-    
-    # Load config parameters
-    hsv_lower1, hsv_upper1 = np.array(config['red_hsv_lower1']), np.array(config['red_hsv_upper1'])
-    hsv_lower2, hsv_upper2 = np.array(config['red_hsv_lower2']), np.array(config['red_hsv_upper2'])
-    min_h, max_h = config['killfeed_rect_min_height'], config['killfeed_rect_max_height']
-    min_aspect_ratio = config['killfeed_rect_min_aspect_ratio']
-    memory_duration = config['kill_memory_duration_seconds']
+KILLFEED_OWN_LIFETIME_S = 7.5
+KILLFEED_FADE_S = 1.0
+DEFAULT_SAMPLE_INTERVAL_S = KILLFEED_OWN_LIFETIME_S / 3
+APPEARANCE_RESOLUTION_S = 0.15
+
+_SIG_SIZE = (96, 12)          # (w, h) of the downsampled row fingerprint
+_SIG_WINDOW = _SIG_SIZE[0] // 12  # compare in windows of a few characters, so one differing name stands out
+_ROW_WIDTH_TOLERANCE = 0.04   # rows of the same kill keep their width to within a few px
+# Distances measured on real footage (354 rows, 3 clips): the same row seen at
+# different times scores up to 0.15 (new rows flash briefly and the game shows
+# through the panel); different rows that pass the width check score 0.136 and up.
+# The two overlap, so a fingerprint alone may only *skip* OCR when it is far
+# below every different-row pair; anything in between is OCR'd and deduped by
+# victim name. A false "same" would drop a kill, a false "different" costs one OCR call.
+_SAME_ROW_MAX = 0.08
+_PRESENT_MAX = 0.15           # looser bound for "is this row on screen yet?" in _find_appearance
+
+# Set by _init_analysis_worker in pool processes; checked between units of work.
+_gaming_event = None
+_GAMING_IDLE_RATIO = 3.0      # while gaming, sleep 3x as long as we worked: ~25% duty cycle
+_gaming_priority_applied = False
+
+
+def _yield_if_gaming(work_seconds: float) -> None:
+    """While the user is playing, back off so the game keeps its frame rate:
+    drop this process (and the ffmpeg children it spawns) to idle CPU priority
+    and sleep in proportion to the work just done, leaving the GPU and CPU free
+    most of the time."""
+    global _gaming_priority_applied
+    gaming = _gaming_event is not None and _gaming_event.is_set()
+    if gaming != _gaming_priority_applied:
+        _set_low_priority(gaming)
+        _gaming_priority_applied = gaming
+    if gaming and work_seconds > 0:
+        time.sleep(work_seconds * _GAMING_IDLE_RATIO)
+
+
+def _set_low_priority(low: bool) -> None:
+    try:
+        import psutil
+        p = psutil.Process()
+        if os.name == 'nt':
+            p.nice(psutil.IDLE_PRIORITY_CLASS if low else psutil.NORMAL_PRIORITY_CLASS)
+        else:
+            p.nice(19 if low else 0)  # raising priority back may need privileges; ignored below
+    except Exception:
+        pass
+
+
+def _read_frame(cap, frame_idx: int):
+    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+    ok, frame = cap.read()
+    return frame if ok else None
+
+
+def _find_kill_rows(killfeed_crop, params) -> list:
+    """Bounding boxes of red-bordered (local player) rows in the killfeed crop."""
+    hsv = cv2.cvtColor(killfeed_crop, cv2.COLOR_BGR2HSV)
+    red_mask = cv2.bitwise_or(cv2.inRange(hsv, params['lo1'], params['hi1']),
+                              cv2.inRange(hsv, params['lo2'], params['hi2']))
+    contours, _ = cv2.findContours(red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    rows = []
+    for cnt in contours:
+        x, y, w, h = cv2.boundingRect(cnt)
+        if params['min_h'] <= h <= params['max_h'] and h > 0 and w / h >= params['min_ar']:
+            rows.append((x, y, w, h))
+    return rows
+
+
+def _row_signature(row_img) -> np.ndarray:
+    """Position-independent fingerprint of one killfeed row: its text and icons
+    (Otsu-thresholded, so the translucent background showing the game through
+    mostly drops out) downsampled to a fixed grid. The same row matches itself
+    after sliding up the feed; rows with different names or weapons don't."""
+    gray = cv2.cvtColor(row_img, cv2.COLOR_BGR2GRAY)
+    _, mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    return cv2.resize(mask, _SIG_SIZE, interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0
+
+
+def _row_distance(sig_a, w_a, sig_b, w_b) -> float:
+    """0 for identical rows; the worst few-character window's mean difference otherwise."""
+    if abs(w_a - w_b) > max(4, _ROW_WIDTH_TOLERANCE * max(w_a, w_b)):
+        return float('inf')
+    col = np.abs(sig_a - sig_b).mean(axis=0)
+    return float(np.convolve(col, np.ones(_SIG_WINDOW) / _SIG_WINDOW, mode='valid').max())
+
+
+def _find_appearance(cap, fps, lo_idx, hi_idx, sig, w, known, crop_box, params) -> int:
+    """Binary-search frames (lo_idx, hi_idx] for the first one showing this row.
+    lo_idx is the previous sample (row absent), hi_idx the current one (present).
+    A probe row only counts as this row if it looks more like it than like any
+    row already on screen (`known`), so a similar older row can't fool the search."""
+    x1, y1, x2, y2 = crop_box
+    min_frames = max(1, int(APPEARANCE_RESOLUTION_S * fps))
+    while hi_idx - lo_idx > min_frames:
+        mid = (lo_idx + hi_idx) // 2
+        frame = _read_frame(cap, mid)
+        if frame is None:
+            break
+        crop = frame[y1:y2, x1:x2]
+        present = False
+        for rx, ry, rw, rh in _find_kill_rows(crop, params):
+            probe = _row_signature(crop[ry:ry + rh, rx:rx + rw])
+            d = _row_distance(sig, w, probe, rw)
+            if d < _PRESENT_MAX and all(d < _row_distance(k['sig'], k['w'], probe, rw) for k in known):
+                present = True
+                break
+        if present:
+            hi_idx = mid
+        else:
+            lo_idx = mid
+    return hi_idx
+
+
+def analyze_killfeed(video_path: str, config: dict, reader) -> list:
+    player_names = [n for n in config.get('player_names') or [] if n and n.strip()]
+    interval = float(config.get('killfeed_sample_interval_seconds', DEFAULT_SAMPLE_INTERVAL_S))
+    # Never sample less often than a row stays up, or kills could slip between samples.
+    interval = min(max(interval, 0.1), KILLFEED_OWN_LIFETIME_S - 0.5)
+    # A row can't still be on screen this long after it appeared; past that,
+    # the same victim name is a new kill (they died again in a later round).
+    row_lifetime = KILLFEED_OWN_LIFETIME_S + KILLFEED_FADE_S
 
     cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened(): return []
+    if not cap.isOpened():
+        return []
 
-    frame_step = config['ocr_frame_step']
-    
-    # Get video resolution and scale ROI accordingly
+    # killfeed_roi is stored in absolute pixels for whatever resolution the user
+    # picked/tuned it at (killfeed_roi_resolution); if that isn't recorded,
+    # treat the ROI as already matching this video.
     video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    roi_coords = config['killfeed_roi']
-    x1, y1, x2, y2 = scale_roi_for_resolution(roi_coords, video_width, video_height)
-    
+    ref_w, ref_h = config.get('killfeed_roi_resolution') or (video_width, video_height)
+    crop_box = scale_roi_for_resolution(config['killfeed_roi'], video_width, video_height, ref_w, ref_h)
+    x1, y1, x2, y2 = crop_box
+    # Row heights are tuned at the same reference resolution as the ROI, so
+    # they scale with it (a row is ~42 px tall at 1440p, ~63 px at 4K).
+    h_scale = video_height / ref_h
+    params = {
+        'lo1': np.array(config['red_hsv_lower1']), 'hi1': np.array(config['red_hsv_upper1']),
+        'lo2': np.array(config['red_hsv_lower2']), 'hi2': np.array(config['red_hsv_upper2']),
+        'min_h': config['killfeed_rect_min_height'] * h_scale,
+        'max_h': config['killfeed_rect_max_height'] * h_scale,
+        'min_ar': config['killfeed_rect_min_aspect_ratio'],
+    }
+
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    
-    print(f"Video resolution: {video_width}x{video_height}")
-    print(f"Original killfeed ROI: {roi_coords}")
-    print(f"Scaled killfeed ROI: [{x1}, {y1}, {x2}, {y2}]")
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    step = max(1, round(interval * fps))
 
-    for frame_idx in range(0, total_frames, frame_step):
-        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-        ret, frame = cap.read()
-        if not ret: break
+    kill_events = []
+    on_screen = []   # rows we've already counted: {sig, w, victim, appeared}
+    prev_idx = None
 
+    for frame_idx in range(0, total_frames, step):
+        t0 = time.perf_counter()
+        frame = _read_frame(cap, frame_idx)
+        if frame is None:
+            break
         timestamp = frame_idx / fps
-        killfeed_crop = frame[y1:y2, x1:x2]
-        
-        hsv = cv2.cvtColor(killfeed_crop, cv2.COLOR_BGR2HSV)
-        mask1 = cv2.inRange(hsv, hsv_lower1, hsv_upper1)
-        mask2 = cv2.inRange(hsv, hsv_lower2, hsv_upper2)
-        red_mask = cv2.bitwise_or(mask1, mask2)
-        contours, _ = cv2.findContours(red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        current_frame_victims = set()
+        on_screen = [k for k in on_screen if timestamp - k['appeared'] <= row_lifetime]
+        crop = frame[y1:y2, x1:x2]
 
-        for cnt in contours:
-            x, y, w, h = cv2.boundingRect(cnt)
-            aspect_ratio = w / h if h > 0 else 0
-            
-            # 1. Filter by shape to find valid kill entries
-            if not (min_h <= h <= max_h and aspect_ratio >= min_aspect_ratio):
+        for x, y, w, h in _find_kill_rows(crop, params):
+            row_img = crop[y:y + h, x:x + w]
+            sig = _row_signature(row_img)
+            if any(_row_distance(k['sig'], k['w'], sig, w) < _SAME_ROW_MAX for k in on_screen):
+                continue  # same row as an earlier sample: already counted, no OCR needed
+
+            ocr_result = reader.readtext(row_img, detail=0, paragraph=True)
+            if not ocr_result:
                 continue
-            
-            # 2. OCR the valid entry to get raw text
-            kill_line_image = killfeed_crop[y:y+h, x:x+w]
-            ocr_result = reader.readtext(kill_line_image, detail=0, paragraph=True)
-            if not ocr_result: continue
-            
-            full_text = " ".join(ocr_result)
-            parsed_info = _parse_and_identify_kill(full_text)
-            
-            if not parsed_info or not parsed_info.get('victim'): continue
+            parsed = _parse_and_identify_kill(" ".join(ocr_result), player_names)
+            if not parsed or not parsed.get('victim'):
+                continue
 
-            victim = parsed_info['victim']
-            # Canonicalize via fuzzy match so OCR variants map to the same victim
-            canonical_victim = _find_fuzzy_victim(victim, active_kills) or victim
-            current_frame_victims.add(canonical_victim)
+            # The fingerprint can miss (e.g. the row is mid-fade), so fall back
+            # to the victim name before deciding this is a new kill.
+            victims = {k['victim']: k for k in on_screen}
+            match = _find_fuzzy_victim(parsed['victim'], victims)
+            if match:
+                victims[match].update(sig=sig, w=w)  # match by pixels next time
+                continue
 
-            # 3. STATE LOGIC: Check if this is a new, unseen kill
-            if canonical_victim not in active_kills:
-                # This is a new kill!
-                _save_debug_screenshot(config, kill_line_image, video_path, "kill_NEW", timestamp, suffix=f"_{victim}")
-                
-                active_kills[canonical_victim] = {"first_seen": timestamp}
+            if not parsed['is_player_kill']:
+                # The player's death or assist: remember the row so it isn't
+                # OCR'd again, but it's not a highlight.
+                on_screen.append({'sig': sig, 'w': w, 'victim': parsed['victim'], 'appeared': timestamp})
+                continue
 
-                if parsed_info['is_player_kill']:
-                    # Detect special kill types (headshot and smoke)
-                    is_headshot = _detect_headshot_icon(kill_line_image)
-                    through_smoke = _detect_smoke_icon(kill_line_image)
-                    
-                    # Debug output for icon detection
-                    if is_headshot or through_smoke:
-                        print(f"  Special kill detected: {parsed_info['victim']} - Headshot: {is_headshot}, Smoke: {through_smoke}")
-                    
-                    kill_event = {
-                        "source_video": video_path,
-                        "timestamp_seconds": timestamp,
-                        "type": "kill",
-                        "details": {
-                            "raw_text": parsed_info['raw_text'],
-                            "detected_player": parsed_info['killer'],
-                            "assister": parsed_info['assister'],
-                            "victim": parsed_info['victim'],
-                            "isHeadshot": is_headshot,
-                            "throughSmoke": through_smoke
-                        }
-                    }
-                    kill_events.append(kill_event)
+            appeared_idx = frame_idx
+            if prev_idx is not None:
+                appeared_idx = _find_appearance(cap, fps, prev_idx, frame_idx, sig, w, on_screen, crop_box, params)
+            appeared = appeared_idx / fps
+            on_screen.append({'sig': sig, 'w': w, 'victim': parsed['victim'], 'appeared': appeared})
 
-        # 4. STATE CLEANUP: Remove victims who are no longer on screen
-        disappeared_victims = [vic for vic in active_kills if vic not in current_frame_victims]
-        for vic in disappeared_victims:
-            if timestamp - active_kills[vic]["first_seen"] > memory_duration:
-                del active_kills[vic]
-    
+            _save_debug_screenshot(config, row_img, video_path, "kill_NEW", appeared, suffix=f"_{parsed['victim']}")
+            is_headshot = _detect_headshot_icon(row_img)
+            through_smoke = _detect_smoke_icon(row_img)
+            kill_events.append({
+                "source_video": video_path,
+                "timestamp_seconds": appeared,
+                "type": "kill",
+                "details": {
+                    "raw_text": parsed['raw_text'],
+                    "detected_player": parsed['killer'],
+                    "assister": parsed['assister'],
+                    "victim": parsed['victim'],
+                    "isHeadshot": is_headshot,
+                    "throughSmoke": through_smoke,
+                },
+            })
+
+        prev_idx = frame_idx
+        _yield_if_gaming(time.perf_counter() - t0)
+
     cap.release()
+    kill_events.sort(key=lambda e: e['timestamp_seconds'])
     return kill_events
 
 
+# --- AUDIO ------------------------------------------------------------------
 
-def analyze_audio(video_path: str, model, temp_dir: str) -> tuple[list, list]:
-    audio_path = None
+_SAMPLE_RATE = 16000
+_RMS_HOP = 512
+_GAMING_CHUNK_S = 30  # Whisper's own window; while gaming we transcribe one at a time and back off between
+
+
+def _transcribe(model, audio: np.ndarray) -> list:
+    fp16 = getattr(model, 'device', None) is not None and model.device.type == 'cuda'
+    if not (_gaming_event is not None and _gaming_event.is_set()):
+        return model.transcribe(audio, fp16=fp16)['segments']
+    # Gaming: one 30 s window per call so the GPU gets long idle gaps instead
+    # of one multi-second burst that would stutter the game.
+    segments = []
+    chunk = _GAMING_CHUNK_S * _SAMPLE_RATE
+    for start in range(0, len(audio), chunk):
+        t0 = time.perf_counter()
+        offset = start / _SAMPLE_RATE
+        for seg in model.transcribe(audio[start:start + chunk], fp16=fp16)['segments']:
+            segments.append({**seg, 'start': seg['start'] + offset, 'end': seg['end'] + offset})
+        _yield_if_gaming(time.perf_counter() - t0)
+    return segments
+
+
+def analyze_audio(video_path: str, model) -> tuple[list, list]:
     try:
-        audio_path = _extract_audio(video_path, temp_dir)
-        transcription = model.transcribe(audio_path, fp16=False)
+        # ffmpeg decodes straight to 16 kHz mono in memory: one decode feeds
+        # both Whisper and the loudness analysis, no temp WAV on disk.
+        audio = whisper.load_audio(video_path, sr=_SAMPLE_RATE)
+        if audio.size == 0:
+            return [], []
+
         voice_events = []
-        for segment in transcription['segments']:
+        for segment in _transcribe(model, audio):
             # Skip segments Whisper itself is uncertain about (likely noise/music)
             if segment.get('no_speech_prob', 0) > 0.5:
                 continue
-            voice_events.append({"source_video": video_path, "timestamp_seconds": segment['start'], "type": "voice", "details": {"text": segment['text']}})
-        y, sr = librosa.load(audio_path, sr=16000)
-        rms = librosa.feature.rms(y=y, frame_length=2048, hop_length=512)[0]
+            voice_events.append({"source_video": video_path, "timestamp_seconds": segment['start'],
+                                 "type": "voice", "details": {"text": segment['text']}})
+
+        # Loudness spikes: one event per contiguous run of loud frames (at its
+        # peak), not one per 32 ms frame.
+        rms = librosa.feature.rms(y=audio, frame_length=2048, hop_length=_RMS_HOP)[0]
         spike_events = []
         if len(rms) > 0:
             rms_normalized = (rms - np.min(rms)) / (np.max(rms) - np.min(rms) + 1e-6)
-            spike_frames = np.where(rms_normalized > 0.8)[0]
-            for frame_idx in spike_frames:
-                timestamp = librosa.frames_to_time(frame_idx, sr=sr, hop_length=512)
-                spike_events.append({"source_video": video_path, "timestamp_seconds": timestamp, "type": "audio_spike", "details": {"intensity": float(rms_normalized[frame_idx])}})
+            loud = rms_normalized > 0.8
+            edges = np.flatnonzero(np.diff(np.concatenate(([0], loud.astype(np.int8), [0]))))
+            for start, end in zip(edges[::2], edges[1::2]):
+                peak = start + int(np.argmax(rms_normalized[start:end]))
+                spike_events.append({
+                    "source_video": video_path,
+                    "timestamp_seconds": float(librosa.frames_to_time(peak, sr=_SAMPLE_RATE, hop_length=_RMS_HOP)),
+                    "type": "audio_spike",
+                    "details": {"intensity": float(rms_normalized[peak])},
+                })
         return voice_events, spike_events
     except Exception as e:
         print(f"  - Error processing audio for {os.path.basename(video_path)}: {e}")
         return [], []
-    finally:
-        if audio_path and os.path.exists(audio_path):
-            os.remove(audio_path)
+
 
 # ---------------------------------------------------------------------------
 # Worker-process helpers for parallel analysis
@@ -345,26 +517,47 @@ _worker_ocr = None
 _worker_whisper = None
 
 
-def _init_analysis_worker(whisper_model_name: str) -> None:
+def _init_analysis_worker(whisper_model_name: str, device: str = 'cpu', torch_threads: int = 1,
+                          gaming_event=None) -> None:
     """Runs once in each worker process to load models into module globals."""
-    global _worker_ocr, _worker_whisper
+    global _worker_ocr, _worker_whisper, _gaming_event
+    import torch
     import easyocr as _easyocr
-    _worker_ocr = _easyocr.Reader(['en'], gpu=False)
-    _worker_whisper = whisper.load_model(whisper_model_name, device='cpu')
+    # Workers run side by side; each takes its share of the cores instead of
+    # every one of them spinning up a thread per core.
+    torch.set_num_threads(torch_threads)
+    cv2.setNumThreads(torch_threads)
+    _gaming_event = gaming_event
+    _worker_ocr = _easyocr.Reader(['en'], gpu=(device == 'cuda'), verbose=False)
+    _worker_whisper = whisper.load_model(whisper_model_name, device=device)
 
 
 def _analyze_video_worker(video_path: str, config: dict) -> list:
     """Runs in a worker process. Uses module-level models loaded by the initializer."""
-    temp_dir = os.path.join(config['data_folder'], 'temp_audio')
     kill_events = analyze_killfeed(video_path, config, _worker_ocr)
-    voice_events, spike_events = analyze_audio(video_path, _worker_whisper, temp_dir)
+    voice_events, spike_events = analyze_audio(video_path, _worker_whisper)
     return kill_events + spike_events + voice_events
+
+
+def make_analysis_pool(config: dict, plan, gaming_event=None):
+    """Process pool sized by `plan` (see chaos_lib.resources). Always uses the
+    spawn start method: worker processes initialise CUDA themselves, which is
+    unsafe in a forked child."""
+    import multiprocessing
+    from concurrent.futures import ProcessPoolExecutor
+    return ProcessPoolExecutor(
+        max_workers=plan.max_workers,
+        mp_context=multiprocessing.get_context('spawn'),
+        initializer=_init_analysis_worker,
+        initargs=(config['whisper_model'], plan.device, plan.torch_threads, gaming_event),
+    )
 
 
 # ---------------------------------------------------------------------------
 
 def run_analysis(config: dict, progress_callback=None):
-    from concurrent.futures import ProcessPoolExecutor, as_completed
+    from concurrent.futures import as_completed
+    from chaos_lib.resources import plan_analysis_workers
 
     data_folder = config['data_folder']
     manifest_path = os.path.join(data_folder, 'manifest.json')
@@ -386,59 +579,20 @@ def run_analysis(config: dict, progress_callback=None):
         print("No video paths to analyze.")
         return
 
-    # Detect GPU at runtime
-    try:
-        import torch
-        use_gpu = torch.cuda.is_available()
-        if use_gpu:
-            print(f"GPU detected: {torch.cuda.get_device_name(0)}")
-    except ImportError:
-        use_gpu = False
-
-    # GPU is not safely shareable across processes — stay single-process.
-    # CPU: parallelise across workers (each spawns its own model instance).
-    max_workers = 1 if use_gpu else max(1, config.get('analysis_workers', min(4, os.cpu_count() or 1)))
+    requested = config.get('pipeline', {}).get('analysis_workers', config.get('analysis_workers'))
+    plan = plan_analysis_workers(config, requested, n_videos=len(video_paths))
+    print(plan.summary)
 
     n = len(video_paths)
     all_events = []
-
-    if max_workers == 1:
-        print("Initializing AI Models (EasyOCR & Whisper)...")
-        import easyocr
-        import platform
-        system = platform.system()
-        if system == 'Darwin' and use_gpu:
-            print("macOS detected: Using CPU to avoid MPS compatibility issues")
-            ocr_reader = easyocr.Reader(['en'], gpu=False)
-        else:
-            ocr_reader = easyocr.Reader(['en'], gpu=use_gpu)
-        whisper_model = whisper.load_model(config['whisper_model'], device='cuda' if use_gpu else 'cpu')
-
-        for i, video_path in enumerate(video_paths):
-            print(f"Analyzing {os.path.basename(video_path)} ({i + 1}/{n})...")
-            kill_events = analyze_killfeed(video_path, config, ocr_reader)
-            voice_events, spike_events = analyze_audio(video_path, whisper_model, os.path.join(data_folder, 'temp_audio'))
-            all_events.extend(kill_events)
-            all_events.extend(spike_events)
-            all_events.extend(voice_events)
+    with make_analysis_pool(config, plan) as pool:
+        futures = {pool.submit(_analyze_video_worker, path, config): path for path in video_paths}
+        for completed, future in enumerate(as_completed(futures), start=1):
+            video_path = futures[future]
+            all_events.extend(future.result())
+            print(f"  Finished {os.path.basename(video_path)} ({completed}/{n})")
             if progress_callback:
-                progress_callback('analyze', video_path, i + 1, n)
-    else:
-        print(f"Analyzing {n} videos across {max_workers} CPU worker processes...")
-        with ProcessPoolExecutor(
-            max_workers=max_workers,
-            initializer=_init_analysis_worker,
-            initargs=(config['whisper_model'],),
-        ) as pool:
-            futures = {pool.submit(_analyze_video_worker, path, config): path for path in video_paths}
-            completed = 0
-            for future in as_completed(futures):
-                video_path = futures[future]
-                all_events.extend(future.result())
-                completed += 1
-                print(f"  Finished {os.path.basename(video_path)} ({completed}/{n})")
-                if progress_callback:
-                    progress_callback('analyze', video_path, completed, n)
+                progress_callback('analyze', video_path, completed, n)
 
     events_path = os.path.join(data_folder, 'all_events.json')
     with open(events_path, 'w') as f:

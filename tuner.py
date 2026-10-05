@@ -62,11 +62,13 @@ def tune_kill_detection(video_path: str, start_time: int, config_path: str = 'co
         hsv_upper1 = np.array(config['red_hsv_upper1'])
         hsv_lower2 = np.array(config['red_hsv_lower2'])
         hsv_upper2 = np.array(config['red_hsv_upper2'])
-        min_h = config['killfeed_rect_min_height']
-        max_h = config['killfeed_rect_max_height']
         min_aspect_ratio = config['killfeed_rect_min_aspect_ratio']
         roi_coords = config['killfeed_roi']
-        x1, y1, x2, y2 = scale_roi_for_resolution(roi_coords, video_width, video_height)
+        ref_w, ref_h = config.get('killfeed_roi_resolution') or (video_width, video_height)
+        # Heights scale with resolution exactly as in analyzers.analyze_killfeed.
+        min_h = config['killfeed_rect_min_height'] * video_height / ref_h
+        max_h = config['killfeed_rect_max_height'] * video_height / ref_h
+        x1, y1, x2, y2 = scale_roi_for_resolution(roi_coords, video_width, video_height, ref_w, ref_h)
         
         killfeed_crop = frame[y1:y2, x1:x2]
         hsv = cv2.cvtColor(killfeed_crop, cv2.COLOR_BGR2HSV)

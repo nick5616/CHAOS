@@ -202,7 +202,7 @@ class AdvancedTab(QWidget):
         self.min_aspect_ratio = QDoubleSpinBox()
         self.min_aspect_ratio.setRange(1.0, 20.0)
         self.min_aspect_ratio.setSingleStep(0.1)
-        self.min_aspect_ratio.setValue(8.0)
+        self.min_aspect_ratio.setValue(5.0)
         self.min_aspect_ratio.valueChanged.connect(self.on_config_changed)
         aspect_layout.addWidget(self.min_aspect_ratio)
         
@@ -217,32 +217,23 @@ class AdvancedTab(QWidget):
         group = QGroupBox("Timing Parameters")
         layout = QVBoxLayout()
         
-        # Kill memory duration
-        memory_layout = QHBoxLayout()
-        memory_layout.addWidget(QLabel("Kill Memory Duration (seconds):"))
-        
-        self.kill_memory_duration = QDoubleSpinBox()
-        self.kill_memory_duration.setRange(1.0, 30.0)
-        self.kill_memory_duration.setSingleStep(0.5)
-        self.kill_memory_duration.setValue(7.0)
-        self.kill_memory_duration.valueChanged.connect(self.on_config_changed)
-        memory_layout.addWidget(self.kill_memory_duration)
-        
-        memory_layout.addStretch()
-        layout.addLayout(memory_layout)
-        
-        # OCR frame step
-        ocr_layout = QHBoxLayout()
-        ocr_layout.addWidget(QLabel("OCR Frame Step:"))
-        
-        self.ocr_frame_step = QSpinBox()
-        self.ocr_frame_step.setRange(1, 100)
-        self.ocr_frame_step.setValue(30)
-        self.ocr_frame_step.valueChanged.connect(self.on_config_changed)
-        ocr_layout.addWidget(self.ocr_frame_step)
-        
-        ocr_layout.addStretch()
-        layout.addLayout(ocr_layout)
+        # Killfeed sample interval
+        sample_layout = QHBoxLayout()
+        sample_layout.addWidget(QLabel("Killfeed Sample Interval (seconds):"))
+
+        self.sample_interval = QDoubleSpinBox()
+        self.sample_interval.setRange(0.5, 7.0)  # your rows stay up 7.5 s in CS2
+        self.sample_interval.setSingleStep(0.5)
+        self.sample_interval.setValue(2.5)
+        self.sample_interval.setToolTip(
+            "How often the killfeed is checked. Your kills stay on screen for 7.5 s,\n"
+            "so 2.5 s sees each one about three times. Lower is slower but more forgiving."
+        )
+        self.sample_interval.valueChanged.connect(self.on_config_changed)
+        sample_layout.addWidget(self.sample_interval)
+
+        sample_layout.addStretch()
+        layout.addLayout(sample_layout)
         
         # Clip buffer times
         buffer_layout = QHBoxLayout()
@@ -441,11 +432,10 @@ class AdvancedTab(QWidget):
             # Load shape detection parameters
             self.min_height.setValue(config.get('killfeed_rect_min_height', 25))
             self.max_height.setValue(config.get('killfeed_rect_max_height', 50))
-            self.min_aspect_ratio.setValue(config.get('killfeed_rect_min_aspect_ratio', 8.0))
+            self.min_aspect_ratio.setValue(config.get('killfeed_rect_min_aspect_ratio', 5.0))
             
             # Load timing parameters
-            self.kill_memory_duration.setValue(config.get('kill_memory_duration_seconds', 7.0))
-            self.ocr_frame_step.setValue(config.get('ocr_frame_step', 30))
+            self.sample_interval.setValue(config.get('killfeed_sample_interval_seconds', 2.5))
             self.pre_buffer.setValue(config.get('clip_pre_buffer_seconds', 7.0))
             self.post_buffer.setValue(config.get('clip_post_buffer_seconds', 8.0))
             
@@ -515,8 +505,9 @@ class AdvancedTab(QWidget):
             config['killfeed_rect_min_aspect_ratio'] = self.min_aspect_ratio.value()
             
             # Save timing parameters
-            config['kill_memory_duration_seconds'] = self.kill_memory_duration.value()
-            config['ocr_frame_step'] = self.ocr_frame_step.value()
+            config['killfeed_sample_interval_seconds'] = self.sample_interval.value()
+            config.pop('kill_memory_duration_seconds', None)
+            config.pop('ocr_frame_step', None)
             config['clip_pre_buffer_seconds'] = self.pre_buffer.value()
             config['clip_post_buffer_seconds'] = self.post_buffer.value()
             
