@@ -300,6 +300,13 @@ class AdvancedTab(QWidget):
         self.audio_spike = self.create_weight_slider(0, 50, 5)
         audio_layout.addWidget(self.audio_spike)
         layout.addLayout(audio_layout)
+
+        # Funny voice-chat moments: points per point of banter score
+        banter_layout = QHBoxLayout()
+        banter_layout.addWidget(QLabel("Funny Moment:"))
+        self.banter_weight = self.create_weight_slider(0, 50, 20)
+        banter_layout.addWidget(self.banter_weight)
+        layout.addLayout(banter_layout)
         
         group.setLayout(layout)
         return group
@@ -446,6 +453,7 @@ class AdvancedTab(QWidget):
             self.team_hype_voice.slider.setValue(scoring_weights.get('team_hype_voice', 20))
             self.enemy_rage_chat.slider.setValue(scoring_weights.get('enemy_rage_chat', 25))
             self.audio_spike.slider.setValue(scoring_weights.get('audio_spike', 5))
+            self.banter_weight.slider.setValue(scoring_weights.get('banter', 20))
             
         except Exception as e:
             QMessageBox.warning(self, "Load Error", f"Failed to load advanced settings: {str(e)}")
@@ -511,14 +519,16 @@ class AdvancedTab(QWidget):
             config['clip_pre_buffer_seconds'] = self.pre_buffer.value()
             config['clip_post_buffer_seconds'] = self.post_buffer.value()
             
-            # Save scoring weights
-            config['scoring_weights'] = {
+            # Save scoring weights (updated in place: weights without a
+            # slider here, like headshot_bonus, must survive the save)
+            config.setdefault('scoring_weights', {}).update({
                 'kill': self.kill_weight.slider.value(),
                 'multi_kill_bonus': self.multi_kill_bonus.slider.value(),
                 'team_hype_voice': self.team_hype_voice.slider.value(),
                 'enemy_rage_chat': self.enemy_rage_chat.slider.value(),
-                'audio_spike': self.audio_spike.slider.value()
-            }
+                'audio_spike': self.audio_spike.slider.value(),
+                'banter': self.banter_weight.slider.value(),
+            })
             
             # Save configuration
             if self.config_manager.save_config(config):

@@ -7,13 +7,20 @@ import os
 from PyQt6.QtWidgets import (
     QDialog, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QLineEdit, QTextEdit, QSpinBox,
-    QGroupBox, QFileDialog, QMessageBox, QScrollArea, QFrame
+    QGroupBox, QFileDialog, QMessageBox, QScrollArea, QFrame, QComboBox, QCheckBox
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 
 from desktop_app.gui.utils.config_manager import ConfigManager
 from desktop_app.gui.tabs.advanced_tab import AdvancedTab
+
+# (config value, label) for moments.mode, see chaos_lib/moments.py
+MOMENT_MODES = [
+    ("off", "Off"),
+    ("funny", "Funny moments only"),
+    ("conversations", "Funny moments + all conversations for review"),
+]
 
 # Same resolution presets as the wizard
 RESOLUTION_PRESETS = [
@@ -107,7 +114,9 @@ class SettingsModal(QDialog):
         # Player names
         names_box = QGroupBox("Player names")
         names_layout = QVBoxLayout(names_box)
-        hint = QLabel("One name per line — all aliases you play under")
+        hint = QLabel("Optional. Your name is read from each video's killfeed; "
+                      "these only help short clips with too few rows to tell. One per line.")
+        hint.setWordWrap(True)
         hint.setStyleSheet("color: #6b7280; font-size: 11px;")
         names_layout.addWidget(hint)
         self._names_edit = QTextEdit()
@@ -156,6 +165,35 @@ class SettingsModal(QDialog):
         chat_layout.addLayout(chat_spin_row)
         layout.addWidget(chat_box)
 
+        # Voice chat: clips without kills, and subtitles
+        voice_box = QGroupBox("Voice chat")
+        voice_layout = QVBoxLayout(voice_box)
+        mode_row = QHBoxLayout()
+        mode_lbl = QLabel("Voice-chat moments:")
+        mode_lbl.setFixedWidth(160)
+        mode_row.addWidget(mode_lbl)
+        self._moments_combo = QComboBox()
+        for value, label in MOMENT_MODES:
+            self._moments_combo.addItem(label, value)
+        mode_row.addWidget(self._moments_combo, 1)
+        voice_layout.addLayout(mode_row)
+        moments_hint = QLabel("Clips banter and laughter even when nobody got a kill. "
+                              "Conversations go to a \"conversations\" folder inside your clips folder, "
+                              "best first, for you to skim.")
+        moments_hint.setWordWrap(True)
+        moments_hint.setStyleSheet("color: #6b7280; font-size: 11px;")
+        voice_layout.addWidget(moments_hint)
+
+        self._subs_check = QCheckBox("Add voice-chat subtitles to clips")
+        voice_layout.addWidget(self._subs_check)
+        subs_hint = QLabel("Burns captions into each clip and saves an .srt next to it "
+                           "(upload it to YouTube as closed captions). Clips are re-encoded, "
+                           "so clipping takes longer.")
+        subs_hint.setWordWrap(True)
+        subs_hint.setStyleSheet("color: #6b7280; font-size: 11px;")
+        voice_layout.addWidget(subs_hint)
+        layout.addWidget(voice_box)
+
         layout.addStretch()
         scroll.setWidget(content)
 
@@ -200,6 +238,10 @@ class SettingsModal(QDialog):
         # below, so hand-tuned values keep whatever they already had.
         self._roi_resolution = config.get("killfeed_roi_resolution")
 
+        idx = self._moments_combo.findData((config.get("moments") or {}).get("mode", "conversations"))
+        self._moments_combo.setCurrentIndex(max(0, idx))
+        self._subs_check.setChecked(bool((config.get("subtitles") or {}).get("enabled", False)))
+
     def _save(self):
         config = self.config_manager.load_config()
 
@@ -213,6 +255,9 @@ class SettingsModal(QDialog):
         config["killfeed_roi"] = [sp.value() for sp in self._kf_spins]
         config["chat_roi"] = [sp.value() for sp in self._chat_spins]
         config["killfeed_roi_resolution"] = self._roi_resolution
+
+        config.setdefault("moments", {})["mode"] = self._moments_combo.currentData()
+        config.setdefault("subtitles", {})["enabled"] = self._subs_check.isChecked()
 
         self.config_manager.save_config(config)
         self.accept()

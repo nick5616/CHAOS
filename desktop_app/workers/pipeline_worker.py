@@ -8,13 +8,20 @@ no video waits for other videos to finish before advancing.
 
 Fault tolerance: per-video state is persisted in data/video_events/:
   {stem}.json    — analysis events saved after analyze completes
-  {stem}.clipped — marker written after all clips for that video are done
-On restart, already-clipped videos are counted silently; already-analyzed
-videos skip straight to correlate+clip.
+  {stem}.clipped — written after all clips for that video are done; records
+                   the video's highlights and the clip file each was cut to
+On restart, a clipped video only counts as finished while its clip files are
+still in the output folder; if any were deleted, it re-correlates from cached
+events and recuts just the missing ones. Already-analyzed videos skip straight
+to correlate+clip. Cached events whose audio analysis is out of date (older
+version, or missing what voice-chat moments or subtitles need) get only their
+audio redone; their kills are kept.
 """
 
 import sys
 import os
+import re
+import glob
 import json
 import multiprocessing
 from collections import defaultdict
@@ -27,9 +34,66 @@ from typing import List
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from chaos_lib import ingestion, analyzers, correlator, clipper, summary
+from chaos_lib import ingestion, analyzers, correlator, clipper, summary, subtitles
 from chaos_lib.resources import plan_analysis_workers
 from desktop_app.gui.utils.config_manager import ConfigManager
+
+
+# ---------------------------------------------------------------------------
+# .clipped markers
+
+def _read_clip_record(marker: str) -> list | None:
+    """Highlights recorded in a .clipped marker, or None for an unreadable
+    or legacy (empty) marker that doesn't say which clips were cut."""
+    try:
+        with open(marker) as f:
+            return json.load(f)['highlights']
+    except Exception:
+        return None
+
+
+def _write_clip_record(marker: str, highlights: list) -> None:
+    try:
+        with open(marker, 'w') as f:
+            json.dump({'highlights': highlights}, f)
+    except Exception:
+        pass
+
+
+def _clip_exists(out_folder: str, h: dict) -> bool:
+    name = h.get('clip_filename')
+    if not name:
+        return False
+    path = os.path.join(out_folder, name)
+    return os.path.exists(path) and os.path.getsize(path) > 0
+
+
+def _clips_present(record: list | None, out_folder: str, stem: str) -> bool:
+    """Whether a finished video's clips are still in the output folder."""
+    if record is not None:
+        return all(_clip_exists(out_folder, h) for h in record)
+    # Legacy marker: no filenames, so settle for any clip of this video.
+    pattern = f"*_{glob.escape(stem[:20])}*.mp4"
+    return bool(glob.glob(os.path.join(out_folder, pattern))
+                or glob.glob(os.path.join(out_folder, 'conversations', pattern)))
+
+
+def _clip_key(h: dict) -> tuple:
+    return (h.get('kind'), round(h['clip_start'], 2), round(h['clip_end'], 2))
+
+
+def _next_clip_index(out_folder: str) -> int:
+    """Highest numeric prefix among existing clips, so new clips never reuse
+    (and get mistaken for) the name of a clip from an earlier run."""
+    highest = 0
+    try:
+        for name in os.listdir(out_folder):
+            m = re.match(r'(\d+)_', name)
+            if m:
+                highest = max(highest, int(m.group(1)))
+    except OSError:
+        pass
+    return highest
 
 
 class PipelineWorker(QThread):
@@ -178,6 +242,7 @@ class PipelineWorker(QThread):
 
         ffmpeg = clipper._get_ffmpeg()
         out_folder = config['final_clips_folder']
+        subs = subtitles.options(config)
 
         video_events_dir = os.path.join(config['data_folder'], 'video_events')
         os.makedirs(video_events_dir, exist_ok=True)
@@ -186,7 +251,7 @@ class PipelineWorker(QThread):
         all_highlights: list = []
         clip_futures: list = []
         pending_clips: dict = defaultdict(int)
-        clip_counter = [0]
+        clip_counter = [_next_clip_index(out_folder)]
         clip_lock = Lock()
         completed = [0]
         n_total = len(video_paths)
@@ -197,28 +262,72 @@ class PipelineWorker(QThread):
         pre_clipped: list = []
         pre_analyzed: dict = {}   # path → events
         needs_analysis: list = []
+        stale_audio: dict = {}    # path → cached events whose audio analysis gets redone
+        moments_only: set = set() # already clipped: only cut the new voice-chat clips
+        prior_clips: dict = {}    # path → highlights a previous run cut (some since deleted)
+        recut: int = 0
+        redo_kills: int = 0
+
+        def _load_events(events_file):
+            try:
+                with open(events_file) as f:
+                    return json.load(f)
+            except Exception:
+                return None
 
         for path in video_paths:
             stem = os.path.splitext(os.path.basename(path))[0]
             events_file  = os.path.join(video_events_dir, f"{stem}.json")
             clipped_file = os.path.join(video_events_dir, f"{stem}.clipped")
-            if os.path.exists(clipped_file) and os.path.exists(events_file):
-                pre_clipped.append(path)
-            elif os.path.exists(events_file):
-                try:
-                    with open(events_file) as f:
-                        pre_analyzed[path] = json.load(f)
-                except Exception:
-                    needs_analysis.append(path)
-            else:
+            events = _load_events(events_file) if os.path.exists(events_file) else None
+            if events is None:
                 needs_analysis.append(path)
+            elif analyzers.kills_are_stale(events):
+                # Kill detection has improved since: analyse again. Clips
+                # whose window comes out the same keep their file.
+                if os.path.exists(clipped_file):
+                    prior_clips[path] = _read_clip_record(clipped_file) or []
+                    os.remove(clipped_file)
+                needs_analysis.append(path)
+                redo_kills += 1
+            elif os.path.exists(clipped_file):
+                # Finished before voice-chat moments existed: find those, but
+                # leave its kill clips alone (turning subtitles on later
+                # doesn't recut finished videos either).
+                if analyzers.audio_is_stale(events, config, check_captions=False):
+                    stale_audio[path] = events
+                    moments_only.add(path)
+                    os.remove(clipped_file)
+                else:
+                    record = _read_clip_record(clipped_file)
+                    if _clips_present(record, out_folder, stem):
+                        pre_clipped.append(path)
+                        all_highlights.extend(record or [])
+                    else:
+                        # Clips were deleted from the output folder: recut
+                        # them from the cached events.
+                        os.remove(clipped_file)
+                        prior_clips[path] = record or []
+                        pre_analyzed[path] = events
+                        recut += 1
+            elif analyzers.audio_is_stale(events, config):
+                stale_audio[path] = events
+            else:
+                pre_analyzed[path] = events
 
         if pre_clipped:
             self.log_message.emit(f"Skipping {len(pre_clipped)} already-finished videos")
+        if recut:
+            self.log_message.emit(f"Recutting clips missing from the output folder: {recut} videos")
+        if redo_kills:
+            self.log_message.emit(f"Re-reading kills with improved detection: {redo_kills} videos")
         if pre_analyzed:
             self.log_message.emit(f"Resuming: {len(pre_analyzed)} videos skip analysis")
+        if stale_audio:
+            self.log_message.emit(f"Updating voice-chat analysis: {len(stale_audio)} videos (kills kept)")
         if needs_analysis:
             self.log_message.emit(f"Analyzing: {len(needs_analysis)} videos")
+        needs_analysis += list(stale_audio)
 
         # Pre-populate the job board with the full queue so users can see all videos
         for path in list(pre_analyzed.keys()) + needs_analysis:
@@ -244,16 +353,21 @@ class PipelineWorker(QThread):
                     all_highlights,
                     clip_pool, clip_futures, clip_counter, clip_lock,
                     pending_clips, completed, n_total, ffmpeg, out_folder,
-                    video_events_dir,
+                    video_events_dir, subs, prior=prior_clips.get(path),
                 )
 
             if not self.should_stop and needs_analysis:
                 # The pool holds up to plan.max_workers processes, spawned on
                 # demand: only _target_workers videos are in flight, and the
                 # stepper can raise that live up to what fits in memory.
-                analyze_pool_cm = analyzers.make_analysis_pool(config, plan, self._gaming_event)
-                submit_task = lambda path: analyze_pool_cm.submit(
-                    analyzers._analyze_video_worker, path, config)
+                analyze_pool_cm = analyzers.make_analysis_pool(
+                    config, plan, self._gaming_event, self._download_progress())
+
+                def submit_task(path):
+                    if path in stale_audio:
+                        return analyze_pool_cm.submit(
+                            analyzers._reanalyze_audio_worker, path, config, stale_audio[path])
+                    return analyze_pool_cm.submit(analyzers._analyze_video_worker, path, config)
 
                 with analyze_pool_cm:
 
@@ -301,7 +415,8 @@ class PipelineWorker(QThread):
                                 all_highlights,
                                 clip_pool, clip_futures, clip_counter, clip_lock,
                                 pending_clips, completed, n_total, ffmpeg, out_folder,
-                                video_events_dir,
+                                video_events_dir, subs, moments_only=path in moments_only,
+                                prior=prior_clips.get(path),
                             )
                             _maybe_submit()
 
@@ -320,12 +435,27 @@ class PipelineWorker(QThread):
 
     # ------------------------------------------------------------------ helpers
 
+    def _download_progress(self):
+        """Log the one-time laughter model download every 10%."""
+        last = [-1]
+
+        def progress(done, total):
+            pct = int(done * 100 / total) // 10 * 10 if total else 0
+            if pct != last[0]:
+                last[0] = pct
+                self.log_message.emit(f"Downloading laughter model (one time, ~360 MB): {pct}%")
+        return progress
+
     def _after_analyze(self, path, name, events, config,
                        all_highlights,
                        clip_pool, clip_futures, clip_counter, clip_lock,
                        pending_clips, completed, n_total, ffmpeg, out_folder,
-                       video_events_dir=None):
-        """Persist events, correlate, and submit clips immediately after analysis."""
+                       video_events_dir=None, subs=None, moments_only=False, prior=None):
+        """Persist events, correlate, and submit clips immediately after analysis.
+        `moments_only` cuts just the voice-chat clips (for a video whose kill
+        clips were made by an earlier run). `prior` holds the highlights an
+        earlier run cut for this video: those whose file still exists keep it
+        and only the rest are cut."""
         stem = os.path.splitext(name)[0]
 
         # Persist events so we can resume if interrupted
@@ -338,36 +468,46 @@ class PipelineWorker(QThread):
 
         self.job_updated.emit(name, 'correlate')
         highlights = correlator.correlate_video_events(path, events, config)
+        if moments_only:
+            highlights = [h for h in highlights if h.get('kind') in ('funny', 'conversation')]
         all_highlights.extend(highlights)
         self.log_message.emit(f"{name}: {len(highlights)} clip(s) found")
 
-        if not highlights:
+        existing = {_clip_key(h): h['clip_filename'] for h in prior or []
+                    if _clip_exists(out_folder, h)}
+        to_cut = []
+        for h in highlights:
+            if _clip_key(h) in existing:
+                h['clip_filename'] = existing[_clip_key(h)]
+            else:
+                to_cut.append(h)
+
+        if not to_cut:
             with clip_lock:
                 completed[0] += 1
                 cnt = completed[0]
             # No clips to make — mark as fully done
             if video_events_dir:
-                try:
-                    open(os.path.join(video_events_dir, f"{stem}.clipped"), 'w').close()
-                except Exception:
-                    pass
+                _write_clip_record(os.path.join(video_events_dir, f"{stem}.clipped"), highlights)
             self.job_finished.emit(name, True)
             self.pipeline_count.emit(cnt, n_total)
             return
 
         self.job_updated.emit(name, 'clip')
-        pending_clips[name] = len(highlights)
-        for h in highlights:
+        pending_clips[name] = len(to_cut)
+        for h in to_cut:
             with clip_lock:
                 idx = clip_counter[0]
                 clip_counter[0] += 1
-            f = clip_pool.submit(clipper._clip_one, idx, h, out_folder, ffmpeg)
+            f = clip_pool.submit(clipper._clip_one, idx, h, out_folder, ffmpeg, subs)
             f.add_done_callback(
-                self._make_clip_callback(name, stem, video_events_dir, pending_clips, completed, clip_lock, n_total)
+                self._make_clip_callback(name, stem, highlights, video_events_dir,
+                                         pending_clips, completed, clip_lock, n_total)
             )
             clip_futures.append((f, name))
 
-    def _make_clip_callback(self, name, stem, video_events_dir, pending_clips, completed, clip_lock, n_total):
+    def _make_clip_callback(self, name, stem, highlights, video_events_dir,
+                            pending_clips, completed, clip_lock, n_total):
         def _callback(future):
             try:
                 future.result()
@@ -382,10 +522,8 @@ class PipelineWorker(QThread):
                     emit_done = True
                     emit_cnt = completed[0]
                     if video_events_dir:
-                        try:
-                            open(os.path.join(video_events_dir, f"{stem}.clipped"), 'w').close()
-                        except Exception:
-                            pass
+                        _write_clip_record(os.path.join(video_events_dir, f"{stem}.clipped"),
+                                           highlights)
             if emit_done:
                 self.job_finished.emit(name, True)
                 self.pipeline_count.emit(emit_cnt, n_total)

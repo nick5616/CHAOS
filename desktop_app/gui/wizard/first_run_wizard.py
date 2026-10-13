@@ -232,13 +232,14 @@ class FirstRunWizard(QDialog):
         layout.setContentsMargins(32, 32, 32, 32)
         layout.setSpacing(16)
 
-        title = QLabel("What are your in-game name(s)?")
+        title = QLabel("What are your in-game name(s)? (optional)")
         title.setFont(QFont("Arial", 18, QFont.Weight.Bold))
         layout.addWidget(title)
 
         desc = QLabel(
-            "CHAOS uses these to recognise your kills in the killfeed.\n"
-            "Enter one name per line — add every alias you play under."
+            "CHAOS works out your name from each video's killfeed, so you can leave this empty.\n"
+            "Names here only help with short clips that show too few of your kills and deaths to tell. "
+            "One name per line."
         )
         desc.setWordWrap(True)
         desc.setStyleSheet("color: #6b7280;")
@@ -249,10 +250,6 @@ class FirstRunWizard(QDialog):
         self._names_edit.setMaximumHeight(140)
         self._names_edit.textChanged.connect(self._validate_names_page)
         layout.addWidget(self._names_edit)
-
-        self._names_error = QLabel("")
-        self._names_error.setStyleSheet("color: #f87171; font-size: 12px;")
-        layout.addWidget(self._names_error)
 
         layout.addStretch()
         return page
@@ -449,14 +446,8 @@ class FirstRunWizard(QDialog):
 
     def _validate_names_page(self):
         raw = self._names_edit.toPlainText()
-        names = [n.strip() for n in raw.splitlines() if n.strip()]
-        if names:
-            self._player_names = names
-            self._names_error.setText("")
-            self._next_btn.setEnabled(True)
-        else:
-            self._names_error.setText("Enter at least one in-game name.")
-            self._next_btn.setEnabled(False)
+        self._player_names = [n.strip() for n in raw.splitlines() if n.strip()]
+        self._next_btn.setEnabled(True)
 
     # -------------------------------------------------------- resolution page
 

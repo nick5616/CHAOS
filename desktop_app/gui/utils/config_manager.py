@@ -60,6 +60,7 @@ class ConfigManager:
             # 7.5 s, so sampling every 2.5 s sees each kill about three times.
             "killfeed_sample_interval_seconds": 2.5,
             "whisper_model": "base",
+            "whisper_language": "en",  # voice-chat language; "auto" lets Whisper guess from the first 30 s
             
             # Correlation & scoring
             "clip_pre_buffer_seconds": 7,
@@ -69,7 +70,33 @@ class ConfigManager:
                 "multi_kill_bonus": 15,
                 "team_hype_voice": 20,
                 "enemy_rage_chat": 25,
-                "audio_spike": 5
+                "audio_spike": 5,
+                "headshot_bonus": 50,
+                "smoke_kill_bonus": 40,
+                "banter": 20  # points per banter-score point of a funny voice-chat moment
+            },
+
+            # Voice-chat moments without kills (chaos_lib/moments.py).
+            # mode: off | funny | conversations (funny + every conversation,
+            # into final_clips/conversations/ for review)
+            "moments": {
+                "mode": "conversations",
+                "min_score": 1.0,
+                "min_turns": 4,
+                "min_speech_coverage": 0.4,
+                "short_file_seconds": 300,
+                "min_clip_seconds": 8,
+                "max_clip_seconds": 60
+            },
+
+            # Voice-chat subtitles on generated clips (chaos_lib/subtitles.py).
+            # model re-transcribes just the clip windows; "base" (= whisper_model)
+            # skips that and reuses the whole-file transcript.
+            "subtitles": {
+                "enabled": False,
+                "burn_in": True,
+                "write_srt": True,
+                "model": "small"
             },
             
             # GUI-specific settings

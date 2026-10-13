@@ -3,7 +3,7 @@ import numpy as np
 import yaml
 import argparse
 # Import the ROI scaling function and icon detection from analyzers
-from chaos_lib.analyzers import scale_roi_for_resolution, _detect_headshot_icon, _detect_smoke_icon
+from chaos_lib.analyzers import scale_roi_for_resolution, _row_layout
 
 def tune_kill_detection(video_path: str, start_time: int, config_path: str = 'config.yaml'):
     print("--- CHAOS Kill Detection Tuner ---")
@@ -95,8 +95,10 @@ def tune_kill_detection(video_path: str, start_time: int, config_path: str = 'co
             
             # Check for special kill types
             kill_region = killfeed_crop[y:y+h, x:x+w]
-            is_headshot = _detect_headshot_icon(kill_region)
-            through_smoke = _detect_smoke_icon(kill_region)
+            layout = _row_layout(kill_region)
+            row_flags = layout['flags'] if layout else {}
+            is_headshot = row_flags.get('isHeadshot', False)
+            through_smoke = row_flags.get('throughSmoke', False)
             
             print(f"Contour #{i}: Pos=({x},{y}) Size=({w}x{h}) Height OK? {height_ok} | Aspect Ratio={aspect_ratio:.2f} OK? {aspect_ok}")
             if is_headshot:

@@ -3,6 +3,7 @@ Results view — shows ranked highlight clips after a pipeline run.
 """
 
 import os
+import html
 import json
 import glob
 import platform
@@ -12,12 +13,12 @@ import cv2
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QListWidget, QListWidgetItem, QSplitter, QFrame, QTextEdit,
+    QListWidget, QListWidgetItem, QSplitter, QFrame, QTextBrowser,
 )
 from PyQt6.QtCore import Qt
 
 from desktop_app.gui.utils.config_manager import ConfigManager
-from desktop_app.gui.widgets.clip_preview import ClipPreviewWidget
+from desktop_app.gui.widgets.clip_preview import ClipPreviewWidget, kill_flags
 
 
 def _fmt_size(n: int) -> str:
@@ -165,11 +166,14 @@ class ResultsView(QWidget):
         chip_container.setFixedHeight(28)
         left_layout.addWidget(chip_container)
 
-        # Details text (rich text, scrollable)
-        self._details_text = QTextEdit()
-        self._details_text.setReadOnly(True)
+        # Details text (rich text, scrollable; "… more events" link expands in place)
+        self._details_expanded = False
+        self._details_args = ({}, 0.0, 0.0)
+        self._details_text = QTextBrowser()
+        self._details_text.setOpenLinks(False)
+        self._details_text.anchorClicked.connect(self._on_details_link)
         self._details_text.setStyleSheet(
-            "QTextEdit { background: #0a0c10; border: 1px solid #1e2128;"
+            "QTextBrowser { background: #0a0c10; border: 1px solid #1e2128;"
             "border-radius: 4px; color: #9ca3af; padding: 6px 8px; }"
         )
         left_layout.addWidget(self._details_text, 2)
@@ -276,6 +280,7 @@ class ResultsView(QWidget):
             self._clear_details()
             return
         clip = item.data(Qt.ItemDataRole.UserRole)
+        self._details_expanded = False
         file_start_s, actual_dur_s = self._try_preview(clip)
         self._update_details(clip, file_start_s, actual_dur_s)
 
@@ -288,6 +293,7 @@ class ResultsView(QWidget):
 
     def _update_details(self, clip: dict, file_start_s: float = 0.0, actual_dur_s: float = 0.0):
         self._clear_details()
+        self._details_args = (clip, file_start_s, actual_dur_s)
 
         # Chips
         for tag in clip.get("tags", []):
@@ -323,15 +329,16 @@ class ResultsView(QWidget):
         event_lines = []
         for ev in kills:
             d = ev.get("details", {})
-            victim = d.get("victim", "?")
-            flags = []
-            if d.get("isHeadshot"):    flags.append("HS")
-            if d.get("throughSmoke"):  flags.append("SMOKE")
+            victim = html.escape(d.get("victim", "?"))
+            killer = d.get("inferred_player") or d.get("detected_player")
+            who = (f"{html.escape(killer)}&nbsp;<span style='color:{muted}'>killed</span>&nbsp;{victim}"
+                   if killer else victim)
+            flags = kill_flags(d)
             flag_str = f"&nbsp;<span style='color:{muted}'>[{' · '.join(flags)}]</span>" if flags else ""
             ts = max(0.0, ev.get("timestamp_seconds", 0) - file_start_s)
             event_lines.append(
                 f"&nbsp;&nbsp;<span style='color:{acc}'>KILL</span>"
-                f"&nbsp;&nbsp;{victim}{flag_str}"
+                f"&nbsp;&nbsp;{who}{flag_str}"
                 f"&nbsp;&nbsp;<span style='color:{dim}'>@ {ts:.1f}s</span>"
             )
         for ev in voices:
@@ -363,17 +370,28 @@ class ResultsView(QWidget):
 
         if event_lines:
             lines.append("")
-            lines.extend(event_lines[:8])
-            if len(events) > 8:
+            shown = event_lines if self._details_expanded else event_lines[:8]
+            lines.extend(shown)
+            hidden = len(event_lines) - len(shown)
+            if hidden:
                 lines.append(
-                    f"&nbsp;&nbsp;<span style='color:{dim}'>… and {len(events) - 8} more events</span>"
+                    f"&nbsp;&nbsp;<a href='more' style='color:#9ca3af'>"
+                    f"… and {hidden} more events</a>"
                 )
 
+        scroll = self._details_text.verticalScrollBar()
+        pos = scroll.value()
         self._details_text.setHtml(
             "<div style='font-size:12px; line-height:1.6;'>"
             + "<br>".join(lines)
             + "</div>"
         )
+        if self._details_expanded:
+            scroll.setValue(pos)
+
+    def _on_details_link(self, _url):
+        self._details_expanded = True
+        self._update_details(*self._details_args)
 
     def _try_preview(self, clip_data: dict) -> tuple:
         """Load clip into the preview widget. Returns (file_start_s, actual_dur_s)."""
@@ -383,9 +401,9 @@ class ResultsView(QWidget):
                 config.get("final_clips_folder", "./final_clips")
             )
 
-            pre_buffer_s = float(config.get("clip_pre_buffer_seconds", 7))
-            clip_start = float(clip_data.get("clip_start", 0))
-            file_start_s = max(0.0, clip_start - pre_buffer_s)
+            # The correlator already folded the pre-buffer into clip_start,
+            # and the clipper cuts from exactly there.
+            file_start_s = max(0.0, float(clip_data.get("clip_start", 0)))
 
             # The pipeline records the exact output filename on each highlight
             # (clip_filename) at clip-cut time. That's the only reliable way

@@ -228,7 +228,7 @@ class ChaosMainWindow(QMainWindow):
             self._ensure_views_loaded()
             self._results_view.set_input_size(input_bytes)
             self._watch_view.mark_dirty()   # new clips available; reload on next visit
-            # Don't auto-navigate — user stays on Run to see the log and go to Results when ready
+            self._switch_view(2)            # straight to the new highlights
 
     # ------------------------------------------------------------------ setup
 

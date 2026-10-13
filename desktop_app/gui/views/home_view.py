@@ -3,9 +3,36 @@ Clip source view (folder/file picker + player names) and run view (pipeline + lo
 """
 
 import os
+import shutil
 import cv2
+from pathlib import Path
 
 VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".avi"}
+
+# Relative config paths resolve against the project root, matching PipelineWorker.
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+# Below this much free space on the clips drive, warn before starting a run.
+LOW_SPACE_BYTES = 5_000_000_000
+
+
+def _clips_folder(cfg: dict) -> str:
+    folder = cfg.get("final_clips_folder") or "./final_clips"
+    if not os.path.isabs(folder):
+        folder = str((_PROJECT_ROOT / folder).resolve())
+    return folder
+
+
+def _free_bytes(path: str) -> "int | None":
+    """Free space on the drive holding path. Walks up to the nearest existing
+    ancestor since the clips folder may not have been created yet."""
+    p = Path(path)
+    while not p.exists() and p.parent != p:
+        p = p.parent
+    try:
+        return shutil.disk_usage(p).free
+    except OSError:
+        return None
 
 
 def _fmt_size(n: int) -> str:
@@ -47,7 +74,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QFileDialog, QApplication, QDialog, QTextEdit,
     QRadioButton, QButtonGroup, QListWidget, QListWidgetItem,
-    QStackedWidget, QFrame, QSizePolicy, QScrollArea, QGridLayout,
+    QStackedWidget, QFrame, QSizePolicy, QScrollArea, QGridLayout, QMessageBox,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QThread, QTimer, QRectF
 from PyQt6.QtGui import QPixmap, QImage, QPainter, QPen, QColor
@@ -957,6 +984,7 @@ class RunView(QWidget):
         self._worker = None
         self._input_size_bytes = 0
         self._worker_target = 2
+        self._auto_workers = False
         self._elapsed_secs = 0
         self._elapsed_timer = QTimer(self)
         self._elapsed_timer.setInterval(1000)
@@ -1037,7 +1065,7 @@ class RunView(QWidget):
         layout.addLayout(top)
 
         # Player names (clearly smaller and muted)
-        self._summary_names_lbl = QLabel("No player names configured")
+        self._summary_names_lbl = QLabel("Player name read from each video's killfeed")
         self._summary_names_lbl.setStyleSheet("font-size: 11px; color: #6b7280;")
         layout.addWidget(self._summary_names_lbl)
 
@@ -1053,13 +1081,24 @@ class RunView(QWidget):
         self._output_path_lbl.setStyleSheet("font-size: 11px; color: #6b7280;")
         bot.addWidget(self._output_path_lbl)
 
+        self._output_free_lbl = QLabel("")
+        self._output_free_lbl.setStyleSheet("font-size: 11px; color: #4b5563;")
+        bot.addWidget(self._output_free_lbl)
+
         _ICON = (
             "QPushButton { font-size: 10px; color: #4b5563; border: 1px solid #2a2d35; "
-            "border-radius: 2px; padding: 0; min-width: 0; min-height: 0; background: transparent; }"
+            "border-radius: 2px; padding: 2px; min-width: 0; min-height: 0; background: transparent; }"
             "QPushButton:hover { color: #9ca3af; border-color: #4b5563; }"
         )
+        self._change_output_btn = QPushButton("Change…")
+        self._change_output_btn.setFixedHeight(22)
+        self._change_output_btn.setStyleSheet(_ICON + "QPushButton { padding: 2px 6px; }")
+        self._change_output_btn.setToolTip("Choose where finished clips are saved")
+        self._change_output_btn.clicked.connect(self._choose_output_folder)
+        bot.addWidget(self._change_output_btn)
+
         self._open_output_btn = QPushButton("↗")
-        self._open_output_btn.setFixedSize(18, 18)
+        self._open_output_btn.setFixedSize(22, 22)
         self._open_output_btn.setStyleSheet(_ICON)
         self._open_output_btn.setToolTip("Open output folder")
         self._open_output_btn.clicked.connect(self._open_output_folder)
@@ -1074,23 +1113,26 @@ class RunView(QWidget):
         _STEP = (
             "QPushButton { background: transparent; border: 1px solid #2a2d35; "
             "color: #6b7280; font-size: 12px; border-radius: 2px; "
-            "padding: 0; min-width: 0; min-height: 0; }"
+            "padding: 2px; min-width: 0; min-height: 0; }"
             "QPushButton:hover { color: #e8963c; border-color: #e8963c; }"
         )
         self._workers_dec_btn = QPushButton("−")
-        self._workers_dec_btn.setFixedSize(18, 18)
+        self._workers_dec_btn.setFixedSize(22, 22)
         self._workers_dec_btn.setStyleSheet(_STEP)
         self._workers_dec_btn.clicked.connect(self._dec_workers)
         bot.addWidget(self._workers_dec_btn)
 
+        # Grows to fit "auto"; the minimum keeps the stepper from jumping for 1-2 digits
         self._workers_count_lbl = QLabel("2")
         self._workers_count_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._workers_count_lbl.setFixedWidth(22)
-        self._workers_count_lbl.setStyleSheet("font-size: 13px; font-weight: bold; color: #c8ccd4;")
+        self._workers_count_lbl.setMinimumWidth(22)
+        self._workers_count_lbl.setStyleSheet(
+            "font-size: 13px; font-weight: bold; color: #c8ccd4; padding: 0 4px;"
+        )
         bot.addWidget(self._workers_count_lbl)
 
         self._workers_inc_btn = QPushButton("+")
-        self._workers_inc_btn.setFixedSize(18, 18)
+        self._workers_inc_btn.setFixedSize(22, 22)
         self._workers_inc_btn.setStyleSheet(_STEP)
         self._workers_inc_btn.clicked.connect(self._inc_workers)
         bot.addWidget(self._workers_inc_btn)
@@ -1166,17 +1208,20 @@ class RunView(QWidget):
             text = ", ".join(shown) + (f"  +{rest} more" if rest else "")
             self._summary_names_lbl.setText(text)
         else:
-            self._summary_names_lbl.setText("No player names configured")
+            self._summary_names_lbl.setText("Player name read from each video's killfeed")
 
         self._apply_hw_badge(cfg)
 
-        self._output_path_lbl.setText(cfg.get("final_clips_folder", "./final_clips"))
+        self._refresh_output_folder(cfg)
 
         nw = cfg.get("pipeline", {}).get("analysis_workers",
              cfg.get("analysis_workers", "auto"))
         # None = auto: the worker sizes the pool from free VRAM/RAM at start.
         self._worker_target = nw if isinstance(nw, int) and nw > 0 else None
         self._workers_count_lbl.setText(str(self._worker_target or "auto"))
+        self._workers_count_lbl.setToolTip(
+            "auto: when the run starts, uses as many workers as fit in free GPU memory and RAM"
+        )
 
     # ------------------------------------------------------------------ hardware badge
 
@@ -1238,12 +1283,67 @@ class RunView(QWidget):
 
     # ------------------------------------------------------------------ output folder
 
+    def _refresh_output_folder(self, cfg: dict) -> None:
+        folder = _clips_folder(cfg)
+        metrics = self._output_path_lbl.fontMetrics()
+        self._output_path_lbl.setText(
+            metrics.elidedText(folder, Qt.TextElideMode.ElideMiddle, 320))
+        self._output_path_lbl.setToolTip(folder)
+
+        free = _free_bytes(folder)
+        if free is None:
+            self._output_free_lbl.setText("")
+            return
+        low = free < LOW_SPACE_BYTES
+        self._output_free_lbl.setText(f"·  {_fmt_size(free)} free")
+        self._output_free_lbl.setStyleSheet(
+            f"font-size: 11px; color: {'#e8963c' if low else '#4b5563'};"
+            + (" font-weight: bold;" if low else ""))
+        self._output_free_lbl.setToolTip(
+            "Low disk space on this drive. Pick a folder on a drive with more room."
+            if low else "")
+
+    def _choose_output_folder(self) -> bool:
+        """Let the user pick the clips folder and save it. True if one was chosen."""
+        cfg = self.config_manager.load_config()
+        path = QFileDialog.getExistingDirectory(
+            self, "Choose where to save finished clips", _clips_folder(cfg))
+        if not path:
+            return False
+        cfg["final_clips_folder"] = path
+        self.config_manager.save_config(cfg)
+        self._refresh_output_folder(cfg)
+        return True
+
+    def _confirm_output_space(self) -> bool:
+        """Warn when the clips drive is nearly full. False cancels the run."""
+        while True:
+            folder = _clips_folder(self.config_manager.load_config())
+            free = _free_bytes(folder)
+            if free is None or free >= LOW_SPACE_BYTES:
+                return True
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setWindowTitle("Low disk space")
+            box.setText(f"Only {_fmt_size(free)} free on the drive for:\n{folder}")
+            box.setInformativeText(
+                "Clips may fail to save if the drive fills up. "
+                "Choose a folder on a drive with more room?")
+            change = box.addButton("Change folder…", QMessageBox.ButtonRole.AcceptRole)
+            run = box.addButton("Run anyway", QMessageBox.ButtonRole.DestructiveRole)
+            box.addButton(QMessageBox.StandardButton.Cancel)
+            box.setDefaultButton(change)
+            box.exec()
+            clicked = box.clickedButton()
+            if clicked is run:
+                return True
+            if clicked is not change or not self._choose_output_folder():
+                return False
+            # Loop to re-check the newly chosen drive.
+
     def _open_output_folder(self) -> None:
         import subprocess, sys as _sys
-        cfg = self.config_manager.load_config()
-        folder = cfg.get("final_clips_folder", "./final_clips")
-        if not os.path.isabs(folder):
-            folder = os.path.abspath(folder)
+        folder = _clips_folder(self.config_manager.load_config())
         os.makedirs(folder, exist_ok=True)
         if _sys.platform == "win32":
             os.startfile(folder)
@@ -1296,6 +1396,9 @@ class RunView(QWidget):
             return
         self._validation_label.setText("")
 
+        if not self._confirm_output_space():
+            return
+
         file_list = self._source.get_file_list()
 
         if file_list:
@@ -1328,13 +1431,26 @@ class RunView(QWidget):
         self._worker.error_occurred.connect(lambda e: self._log_viewer.add_message(e, "error"))
         self._worker.finished.connect(self._on_pipeline_done)
 
-        self._pipeline_widget.set_worker_target(self._worker_target or 1)
-        self._worker.workers_count_changed.connect(self._pipeline_widget.set_worker_target)
+        # Until the user steps the count, an "auto" run says so next to it.
+        self._auto_workers = self._worker_target is None
+        self._pipeline_widget.set_worker_target(self._worker_target or 1, self._worker_note())
+        self._worker.workers_count_changed.connect(
+            lambda n: self._pipeline_widget.set_worker_target(n, self._worker_note()))
+        # Connected before the worker's slot so a clamp it reports back is no longer labelled auto
+        self._pipeline_widget.workers_changed.connect(self._on_workers_stepped)
         self._pipeline_widget.workers_changed.connect(self._worker.set_target_workers)
 
         self._set_running(True)
         self._log_viewer.clear_log()
         self._worker.start()
+
+    def _worker_note(self) -> str:
+        if self._gaming_btn.isChecked():
+            return "gaming"
+        return "auto" if self._auto_workers else ""
+
+    def _on_workers_stepped(self, _n: int) -> None:
+        self._auto_workers = False
 
     def _toggle_pause(self):
         if not self._worker:

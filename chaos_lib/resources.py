@@ -19,6 +19,11 @@ into are read from the user's machine at run time.
     EasyOCR (killfeed crops)      155 MB    ~560 MB (+ ~460 MB torch/cv2 imports)
     Whisper base  (74M params)    365 MB    small
     Whisper small (244M params)   1500 MB   -
+
+    PANNs Cnn14_16k laughter      690 MB    ~450 MB (est.)
+
+The laughter tagger is loaded only with voice-chat moments on; with subtitles
+on, each worker also holds a second Whisper for re-transcribing clip windows.
 """
 
 import os
@@ -36,6 +41,8 @@ CUDA_CONTEXT_VRAM_MB = 160     # per-process CUDA context + caching allocator
 EASYOCR_VRAM_MB = 160          # CRAFT + recognizer working on killfeed-row-sized crops
 WORKER_RAM_MB = 1100           # torch + cv2 + EasyOCR resident set, before Whisper
 GPU_WORKER_EXTRA_RAM_MB = 500  # host-side CUDA/cuDNN libraries per GPU process (est.)
+LAUGHTER_VRAM_MB = 690         # Cnn14_16k: 311 MB fp32 weights + batch-of-8 activations, measured
+LAUGHTER_RAM_MB = 450          # same model on the CPU (est.)
 
 SAFETY_FACTOR = 1.25           # fragmentation, driver overhead, longer audio than we measured on
 VRAM_HEADROOM_MB = 1 * _GB     # left free for the desktop compositor, OBS, the browser…
@@ -126,17 +133,33 @@ def plan_analysis_workers(config: dict, requested=None, n_videos: int | None = N
 
     `requested` is the user's worker count; None, 0 or "auto" means "as many as fit".
     """
+    from chaos_lib import moments, subtitles
     whisper_name = config.get('whisper_model', 'base')
     params_m = _whisper_params_m(whisper_name)
+    # Optional models every worker loads alongside OCR + Whisper
+    extra_vram = extra_ram = 0.0
+    extras = []
+    if moments.enabled(config):
+        extra_vram += LAUGHTER_VRAM_MB
+        extra_ram += LAUGHTER_RAM_MB
+        extras.append('laughter')
+    caption_model = subtitles.caption_model_name(config)
+    if caption_model:
+        extra_vram += whisper_vram_mb(_whisper_params_m(caption_model))
+        extra_ram += whisper_ram_mb(_whisper_params_m(caption_model))
+        extras.append(f'subtitle whisper {caption_model}')
+    extras_note = ''.join(f' + {e}' for e in extras)
     cores = _physical_cores()
     logical = os.cpu_count() or cores
     ram_free = _available_ram_mb()
     gpu = query_gpu() if cuda_available() else None
-    per_worker_vram = int((CUDA_CONTEXT_VRAM_MB + EASYOCR_VRAM_MB + whisper_vram_mb(params_m)) * SAFETY_FACTOR)
+    per_worker_vram = int((CUDA_CONTEXT_VRAM_MB + EASYOCR_VRAM_MB + whisper_vram_mb(params_m) + extra_vram)
+                          * SAFETY_FACTOR)
     by_vram = (gpu[2] - VRAM_HEADROOM_MB) // per_worker_vram if gpu else 0
 
     if gpu and by_vram >= 1:
         name, total_mb, free_mb = gpu
+        # Weights load on the host first, so GPU workers still need their RAM briefly
         per_worker_ram = int(WORKER_RAM_MB + GPU_WORKER_EXTRA_RAM_MB + whisper_ram_mb(params_m))
         # Each GPU worker still decodes video and runs ffmpeg on the CPU; past
         # about one worker per two physical cores they just queue on the GPU.
@@ -144,9 +167,9 @@ def plan_analysis_workers(config: dict, requested=None, n_videos: int | None = N
         limits = {'VRAM': by_vram, 'CPU': by_cpu}
         device = 'cuda'
         detail = (f"{name}: {free_mb / _GB:.1f} of {total_mb / _GB:.1f} GB free, "
-                  f"~{per_worker_vram / _GB:.2f} GB per worker (whisper {whisper_name} + EasyOCR + CUDA context)")
+                  f"~{per_worker_vram / _GB:.2f} GB per worker (whisper {whisper_name} + EasyOCR{extras_note} + CUDA context)")
     else:
-        per_worker_ram = int(WORKER_RAM_MB + whisper_ram_mb(params_m))
+        per_worker_ram = int(WORKER_RAM_MB + whisper_ram_mb(params_m) + extra_ram)
         limits = {'CPU': cores}
         device = 'cpu'
         if gpu:

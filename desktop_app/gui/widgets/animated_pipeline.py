@@ -88,6 +88,7 @@ class AnimatedPipelineWidget(QWidget):
         self._total:    int = 0
         self._scroll_y: int = 0
         self._worker_target: int = 2
+        self._worker_note: str = ""
         self._dec_rect = None
         self._inc_rect = None
 
@@ -107,8 +108,9 @@ class AnimatedPipelineWidget(QWidget):
     def set_total(self, n: int) -> None:
         self._total = n; self._update_size(); self.update()
 
-    def set_worker_target(self, n: int) -> None:
-        self._worker_target = max(1, n); self.update()
+    def set_worker_target(self, n: int, note: str = "") -> None:
+        """`note` ("auto", "gaming") explains where the count came from."""
+        self._worker_target = max(1, n); self._worker_note = note; self.update()
 
     def on_job_started(self, name: str, stage: str) -> None:
         existing = next((r for r in self._rows if r.name == name), None)
@@ -183,12 +185,14 @@ class AnimatedPipelineWidget(QWidget):
             if self._dec_rect and self._dec_rect.contains(pos):
                 n = max(1, self._worker_target - 1)
                 self._worker_target = n
+                self._worker_note = ""
                 self.workers_changed.emit(n)
                 self.update()
                 return
             if self._inc_rect and self._inc_rect.contains(pos):
                 n = self._worker_target + 1
                 self._worker_target = n
+                self._worker_note = ""
                 self.workers_changed.emit(n)
                 self.update()
                 return
@@ -311,6 +315,13 @@ class AnimatedPipelineWidget(QWidget):
         fn = QFont(); fn.setPointSize(9); p.setFont(fn)
         p.setPen(QPen(dim))
         p.drawText(QRectF(sx + bw + gap, step_y, tw, bh), Qt.AlignmentFlag.AlignCenter, ts)
+
+        if self._worker_note:
+            note = {"auto": "workers (auto: as many as fit in memory)",
+                    "gaming": "worker (gaming mode)"}.get(self._worker_note, self._worker_note)
+            nx = self._inc_rect.right() + 8
+            p.drawText(QRectF(nx, sy, p.fontMetrics().horizontalAdvance(note) + 4, _HEADER_SUM_H),
+                       Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, note)
 
     # ------------------------------------------------------------------ rows
 
