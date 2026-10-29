@@ -3,7 +3,7 @@ Live job-board pipeline widget.
 
 Each card shows:
   - Video filename (middle-elided)
-  - A single full-width processing bar:
+  - A processing bar to the right of the name:
       active  = sweeping shimmer wave
       queued  = dim outline + "QUEUED"
       done    = green fill that fades out
@@ -40,9 +40,9 @@ _HEADER_BAR_H = _PAD_Y + _BAR_H + 6
 _HEADER_SUM_H = 20
 _HEADER_H     = _HEADER_BAR_H + _HEADER_SUM_H + _PAD_Y
 
-_ROW_H       = 52
-_NAME_H      = 26
+_ROW_H       = 36       # one line: name on the left, status bar on the right
 _PROC_H      = 16
+_NAME_FRAC   = 0.5      # share of the card width given to the file name
 _ROW_STEP    = _ROW_H + 4
 _MAX_VIS     = 6
 _FADE_STEP   = 0.032
@@ -89,6 +89,7 @@ class AnimatedPipelineWidget(QWidget):
         self._scroll_y: int = 0
         self._worker_target: int = 2
         self._worker_note: str = ""
+        self._status: str = ""   # latest pipeline message, shown while nothing is processing
         self._dec_rect = None
         self._inc_rect = None
 
@@ -107,6 +108,10 @@ class AnimatedPipelineWidget(QWidget):
 
     def set_total(self, n: int) -> None:
         self._total = n; self._update_size(); self.update()
+
+    def set_status(self, text: str) -> None:
+        """What the pipeline is doing, e.g. a model download, for the header."""
+        self._status = text; self.update()
 
     def set_worker_target(self, n: int, note: str = "") -> None:
         """`note` ("auto", "gaming") explains where the count came from."""
@@ -162,6 +167,7 @@ class AnimatedPipelineWidget(QWidget):
 
     def reset(self) -> None:
         self._rows.clear(); self._done = 0; self._total = 0; self._scroll_y = 0
+        self._status = ""
         self._update_size(); self.update()
 
     # ------------------------------------------------------------------ sort
@@ -278,10 +284,12 @@ class AnimatedPipelineWidget(QWidget):
         n_active = sum(1 for r in self._rows if r.stage in _ACTIVE_STAGES and not r.fading)
         if n_active == 0:
             self._dec_rect = self._inc_rect = None
-            p.setPen(QPen(self._TEXT_DIM))
-            p.drawText(QRectF(x, sy, bw, _HEADER_SUM_H),
+            p.setPen(QPen(QColor("#9ca3af") if self._status else self._TEXT_DIM))
+            count_w = fm.horizontalAdvance(f"{self._done} / {self._total}") + 16
+            p.drawText(QRectF(x, sy, bw - count_w, _HEADER_SUM_H),
                        Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-                       "Waiting...")
+                       fm.elidedText(self._status or "Starting…",
+                                     Qt.TextElideMode.ElideRight, int(bw - count_w)))
         else:
             label = f"{n_active} processing"
             lw = float(fm.horizontalAdvance(label))
@@ -397,16 +405,17 @@ class AnimatedPipelineWidget(QWidget):
         tc = QColor(self._TEXT if not is_queued else self._TEXT_DIM)
         tc.setAlpha(alpha)
         p.setPen(QPen(tc))
-        name_rect = QRectF(x + 10, y + 4, rw - 20, float(_NAME_H))
+        name_w = (rw - 30) * _NAME_FRAC
+        name_rect = QRectF(x + 10, y, name_w, rh)
         elided = p.fontMetrics().elidedText(
-            row.name, Qt.TextElideMode.ElideMiddle, int(rw - 20)
+            row.name, Qt.TextElideMode.ElideMiddle, int(name_w)
         )
         p.drawText(name_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, elided)
 
-        bx = x + 10
-        by = y + _NAME_H + 4
-        bw = rw - 20
+        bx = x + 20 + name_w
         bh = float(_PROC_H)
+        by = y + (rh - bh) / 2
+        bw = rw - 30 - name_w
 
         if is_active:
             self._draw_bar_active(p, bx, by, bw, bh, row, alpha)

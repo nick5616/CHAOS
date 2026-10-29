@@ -8,19 +8,28 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from chaos_lib import subtitles
 
 
+_REPO_BIN = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'bin')
+
+
 def _get_ffmpeg() -> str:
+    """ffmpeg on PATH, else the copy setup put in <repo>/bin, else a winget/manual
+    install that hasn't reached this process's PATH yet (winget only updates PATH
+    for processes started after it ran)."""
     path = shutil.which('ffmpeg')
     if path:
         return path
+    local_appdata = os.environ.get('LOCALAPPDATA', '')
     for pattern in [
-        r"C:\Users\nickb\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg*\*\bin\ffmpeg.exe",
+        os.path.join(_REPO_BIN, 'ffmpeg.exe' if os.name == 'nt' else 'ffmpeg'),
+        os.path.join(local_appdata, r"Microsoft\WinGet\Links\ffmpeg.exe"),
+        os.path.join(local_appdata, r"Microsoft\WinGet\Packages\Gyan.FFmpeg*\*\bin\ffmpeg.exe"),
         r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
         r"C:\Program Files (x86)\ffmpeg\bin\ffmpeg.exe",
     ]:
         matches = glob.glob(pattern)
         if matches:
             return matches[0]
-    raise FileNotFoundError("FFmpeg not found. Please ensure FFmpeg is installed and in your PATH.")
+    raise FileNotFoundError("FFmpeg not found. Run setup again, or install FFmpeg and add it to your PATH.")
 
 
 def _get_ffprobe() -> str:

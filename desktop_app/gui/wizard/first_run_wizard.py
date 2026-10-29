@@ -62,7 +62,7 @@ class FirstRunWizard(QDialog):
         self._chat_roi = RESOLUTION_PRESETS[0]["chat_roi"][:]
         self._killfeed_roi_resolution = RESOLUTION_PRESETS[0]["resolution"][:]
 
-        self.setWindowTitle("CHAOS — First-Time Setup")
+        self.setWindowTitle("CHAOS Setup")
         self.setFixedSize(680, 520)
         self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowTitleHint)
 
@@ -77,9 +77,12 @@ class FirstRunWizard(QDialog):
         root.setSpacing(0)
 
         # Header bar
+        # ID selectors: a bare rule would also give every child label the border
         self._header = QFrame()
+        self._header.setObjectName("wizardHeader")
         self._header.setFixedHeight(56)
-        self._header.setStyleSheet("background-color: #1a1d23; border-bottom: 1px solid #2a2d35;")
+        self._header.setStyleSheet(
+            "#wizardHeader { background-color: #1a1d23; border-bottom: 1px solid #2a2d35; }")
         header_layout = QHBoxLayout(self._header)
         header_layout.setContentsMargins(20, 0, 20, 0)
 
@@ -106,8 +109,10 @@ class FirstRunWizard(QDialog):
 
         # Footer bar
         footer = QFrame()
+        footer.setObjectName("wizardFooter")
         footer.setFixedHeight(64)
-        footer.setStyleSheet("background-color: #1a1d23; border-top: 1px solid #2a2d35;")
+        footer.setStyleSheet(
+            "#wizardFooter { background-color: #1a1d23; border-top: 1px solid #2a2d35; }")
         footer_layout = QHBoxLayout(footer)
         footer_layout.setContentsMargins(20, 0, 20, 0)
 
@@ -152,7 +157,7 @@ class FirstRunWizard(QDialog):
 
         desc = QLabel(
             "CHAOS needs FFmpeg and a few Python packages to analyze your footage.\n"
-            "This only runs once — sit tight while we get everything ready."
+            "This only runs once. Sit tight while we get everything ready."
         )
         desc.setWordWrap(True)
         desc.setStyleSheet("color: #6b7280;")
@@ -298,6 +303,7 @@ class FirstRunWizard(QDialog):
         for _ in range(4):
             sp = QSpinBox()
             sp.setRange(0, 9999)
+            sp.setMinimumHeight(30)
             sp.valueChanged.connect(self._read_custom_rois)
             kf_row.addWidget(sp)
             self._kf_spins.append(sp)
@@ -309,6 +315,7 @@ class FirstRunWizard(QDialog):
         for _ in range(4):
             sp = QSpinBox()
             sp.setRange(0, 9999)
+            sp.setMinimumHeight(30)
             sp.valueChanged.connect(self._read_custom_rois)
             chat_row.addWidget(sp)
             self._chat_spins.append(sp)
@@ -317,7 +324,7 @@ class FirstRunWizard(QDialog):
         self._custom_box.setVisible(False)
         layout.addWidget(self._custom_box)
 
-        note = QLabel("Note: coordinates are approximate — verify with a test run on your footage.")
+        note = QLabel("These regions are approximate. Check them with a test run on your footage.")
         note.setWordWrap(True)
         note.setStyleSheet("color: #6b7280; font-size: 11px;")
         layout.addWidget(note)
@@ -391,8 +398,9 @@ class FirstRunWizard(QDialog):
         self._setup_status.setText(msg)
 
     def _on_setup_step(self, name: str, ok: bool):
-        icon = "" if ok else ""
-        self._setup_log.append(f"  {icon}  {name}")
+        mark = ("<span style='color:#4ade80'>✓</span>" if ok
+                else "<span style='color:#f87171'>✗</span>")
+        self._setup_log.append(f"{mark}&nbsp;&nbsp;{name}")
 
     def _on_gpu_info(self, info: dict):
         self._gpu_info = info
@@ -418,10 +426,10 @@ class FirstRunWizard(QDialog):
     def _on_setup_finished(self, success: bool):
         self.setup_done = True
         if success:
-            self._setup_status.setText("Setup complete — you're good to go!")
+            self._setup_status.setText("Setup complete. You're good to go!")
             self._setup_log.append("\nAll dependencies are ready.")
         else:
-            self._setup_status.setText("Setup finished with warnings — some items may be missing.")
+            self._setup_status.setText("Setup finished with warnings. Some items may be missing.")
             self._setup_log.append("\nProceed anyway, or re-run setup from Settings later.")
         self._next_btn.setEnabled(True)
 

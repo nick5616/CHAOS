@@ -34,6 +34,8 @@ RESOLUTION_PRESETS = [
 class SettingsModal(QDialog):
     """Application settings in a tabbed modal dialog."""
 
+    _LABEL_W = 150  # shared width of row labels so the fields line up
+
     def __init__(self, config_manager: ConfigManager, parent=None):
         super().__init__(parent)
         self.config_manager = config_manager
@@ -124,53 +126,38 @@ class SettingsModal(QDialog):
         names_layout.addWidget(self._names_edit)
         layout.addWidget(names_box)
 
-        # Killfeed ROI
-        kf_box = QGroupBox("Killfeed region (x1, y1, x2, y2)")
+        # Killfeed and chat regions
+        kf_box = QGroupBox("Screen regions (pixels)")
         kf_layout = QVBoxLayout(kf_box)
+        kf_layout.setSpacing(8)
 
         # Resolution presets
         preset_row = QHBoxLayout()
-        preset_row.addWidget(QLabel("Quick-apply preset:"))
+        preset_lbl = QLabel("Preset:")
+        preset_lbl.setFixedWidth(self._LABEL_W)
+        preset_row.addWidget(preset_lbl)
         for preset in RESOLUTION_PRESETS:
             btn = QPushButton(preset["label"])
-            btn.setFixedHeight(28)
+            btn.setStyleSheet("QPushButton { padding: 4px 12px; min-width: 0; }")
+            btn.setToolTip("Fill in both regions for this in-game resolution")
             # Capture preset value in closure
             btn.clicked.connect(lambda _, p=preset: self._apply_roi_preset(p))
             preset_row.addWidget(btn)
         preset_row.addStretch()
         kf_layout.addLayout(preset_row)
 
-        kf_spin_row = QHBoxLayout()
-        self._kf_spins = []
-        for label in ("x1", "y1", "x2", "y2"):
-            kf_spin_row.addWidget(QLabel(label))
-            sp = QSpinBox()
-            sp.setRange(0, 9999)
-            kf_spin_row.addWidget(sp)
-            self._kf_spins.append(sp)
+        self._kf_spins, kf_spin_row = self._make_roi_row("Killfeed")
         kf_layout.addLayout(kf_spin_row)
+        self._chat_spins, chat_spin_row = self._make_roi_row("Chat")
+        kf_layout.addLayout(chat_spin_row)
         layout.addWidget(kf_box)
-
-        # Chat ROI
-        chat_box = QGroupBox("Chat region (x1, y1, x2, y2)")
-        chat_layout = QVBoxLayout(chat_box)
-        chat_spin_row = QHBoxLayout()
-        self._chat_spins = []
-        for label in ("x1", "y1", "x2", "y2"):
-            chat_spin_row.addWidget(QLabel(label))
-            sp = QSpinBox()
-            sp.setRange(0, 9999)
-            chat_spin_row.addWidget(sp)
-            self._chat_spins.append(sp)
-        chat_layout.addLayout(chat_spin_row)
-        layout.addWidget(chat_box)
 
         # Voice chat: clips without kills, and subtitles
         voice_box = QGroupBox("Voice chat")
         voice_layout = QVBoxLayout(voice_box)
         mode_row = QHBoxLayout()
         mode_lbl = QLabel("Voice-chat moments:")
-        mode_lbl.setFixedWidth(160)
+        mode_lbl.setFixedWidth(self._LABEL_W)
         mode_row.addWidget(mode_lbl)
         self._moments_combo = QComboBox()
         for value, label in MOMENT_MODES:
@@ -201,11 +188,33 @@ class SettingsModal(QDialog):
         tab_layout.setContentsMargins(0, 0, 0, 0)
         tab_layout.addWidget(scroll)
 
+    def _make_roi_row(self, title: str):
+        """'Title  x1 [ ]  y1 [ ]  x2 [ ]  y2 [ ]' with each label next to its box."""
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        lbl = QLabel(f"{title}:")
+        lbl.setFixedWidth(self._LABEL_W)
+        row.addWidget(lbl)
+        spins = []
+        for i, axis in enumerate(("x1", "y1", "x2", "y2")):
+            if i:
+                row.addSpacing(10)
+            axis_lbl = QLabel(axis)
+            axis_lbl.setStyleSheet("color: #6b7280;")
+            row.addWidget(axis_lbl)
+            sp = QSpinBox()
+            sp.setRange(0, 9999)
+            sp.setFixedWidth(84)
+            row.addWidget(sp)
+            spins.append(sp)
+        row.addStretch()
+        return spins, row
+
     def _make_folder_row(self, label_text: str):
         edit = QLineEdit()
         row = QHBoxLayout()
         lbl = QLabel(label_text)
-        lbl.setFixedWidth(160)
+        lbl.setFixedWidth(self._LABEL_W)
         row.addWidget(lbl)
         row.addWidget(edit)
         browse = QPushButton("Browse…")
@@ -243,6 +252,9 @@ class SettingsModal(QDialog):
         self._subs_check.setChecked(bool((config.get("subtitles") or {}).get("enabled", False)))
 
     def _save(self):
+        # Advanced first: it writes its own keys, which the load below then keeps
+        if not self._advanced_tab.save_settings(quiet=True):
+            return
         config = self.config_manager.load_config()
 
         config["captures_folder"] = self._captures_edit.text().strip()

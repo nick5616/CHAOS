@@ -22,10 +22,8 @@ game audio): talking scores 0.4-0.9, gameplay without talking ~0.03.
 The checkpoint (~360 MB) is downloaded once into <data_folder>/models/.
 """
 
-import hashlib
 import os
 import time
-import urllib.request
 
 import numpy as np
 
@@ -54,26 +52,8 @@ def ensure_checkpoint(data_folder: str, progress=None) -> str:
     """Download the checkpoint if it isn't there yet. `progress(done_bytes, total_bytes)`
     is called while downloading. Writes to a .part file and checks its hash
     first, so an interrupted or tampered download is never used."""
-    path = checkpoint_path(data_folder)
-    if os.path.exists(path):
-        return path
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    part = path + '.part'
-    sha = hashlib.sha256()
-    with urllib.request.urlopen(CHECKPOINT_URL, timeout=60) as resp, open(part, 'wb') as f:
-        total = int(resp.headers.get('Content-Length') or 0)
-        done = 0
-        while chunk := resp.read(1 << 20):
-            f.write(chunk)
-            sha.update(chunk)
-            done += len(chunk)
-            if progress:
-                progress(done, total)
-    if sha.hexdigest() != CHECKPOINT_SHA256:
-        os.remove(part)
-        raise RuntimeError("Laughter model download is corrupt (checksum mismatch)")
-    os.replace(part, path)
-    return path
+    from chaos_lib import models
+    return models.fetch(models.laughter_model(data_folder), progress)
 
 
 def _build_model():

@@ -27,3 +27,9 @@ final_clips/
 Thumbs.db
 
 /data/debug_screenshots/
+
+# Portable FFmpeg that setup downloads when it cannot install one system-wide
+/bin/
+
+# Desktop app output when launched without a console (Start Menu shortcut)
+/chaos.log

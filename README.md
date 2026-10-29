@@ -16,85 +16,46 @@ This project is the answer to that feeling.
 
 This repository documents my attempt to fight creative burnout with code, turning a terabyte of digital chaos into a curated library of meaningful highlights.
 
-## Setup & Installation
+## Install
 
-### Automated Setup (Recommended)
-
-The setup scripts will automatically install all dependencies including FFmpeg:
-
-**Windows:**
-```bash
-# Option 1: Batch script (tries winget, chocolatey, then direct download)
-setup.bat
-
-# Option 2: PowerShell script (more reliable)
-setup.ps1
-
-# Option 3: Manual FFmpeg installation if needed
-install_ffmpeg.ps1
-```
-
-**Linux/macOS:**
-```bash
-# Automatically detects your package manager and installs FFmpeg
-./setup.sh
-```
-
-### Manual Setup (If automated fails)
-
-CHAOS is designed to work on both **Windows (with NVIDIA GPUs)** and **macOS (with Apple Silicon)**. The setup scripts will automatically handle the platform-specific dependencies for you.
-
-### Getting Started
-
-**1. Clone the Repository:**
-First, get the code onto your local machine.
+Get the code, then run one script.
 
 ```bash
 git clone https://github.com/your-username/CHAOS.git
 cd CHAOS
 ```
 
-**2. Run the Setup Script for Your OS:**
-The script will create a virtual environment (venv) and install all necessary dependencies, including the correct, hardware-accelerated version of PyTorch for your system.
+| | |
+|---|---|
+| **Windows** | Double-click `setup.bat` |
+| **macOS / Linux** | `./setup.sh` |
 
-On Windows:
-Simply double-click the setup.bat file. A command window will open and handle the entire installation.
+That's it. Setup will:
 
-On macOS / Linux:
-Open a terminal in the CHAOS folder, make the script executable, and then run it:
+1. Find Python 3.10+ (on Windows, it installs Python 3.12 for you if needed).
+2. Create a `venv` in the CHAOS folder.
+3. Install the right PyTorch for your hardware: a CUDA build matched to your NVIDIA driver, Apple Silicon (MPS) on a Mac, or CPU-only otherwise.
+4. Install the rest of the Python packages.
+5. Install FFmpeg if it's missing (winget, Homebrew or your Linux package manager; on Windows it falls back to a portable copy in `bin\`).
+6. Check that everything imports, and report whether you're running on GPU or CPU.
+7. Add CHAOS to the Start Menu (Windows) or your applications menu (Linux).
 
-```bash
-chmod +x setup.sh
-./setup.sh
-```
+The first run downloads a few GB, mostly PyTorch. Setup is safe to re-run: it skips anything already done, so run it again if something failed or after you install an NVIDIA driver to switch to the GPU build. On Windows, `setup.bat --desktop-shortcut` also puts a shortcut on the Desktop.
 
-After the script finishes, your environment is ready.
+## Usage
 
-### ‍Usage
-
-#### 1. Activate the Virtual Environment:
-
-Before running any commands, you must activate the virtual environment in your terminal. You'll know it's active when you see (venv) at the start of your prompt.
-
-On Windows:
+Launch CHAOS from the Start Menu, or from the CHAOS folder:
 
 ```bash
-.\venv\Scripts\activate
+venv\Scripts\python run_desktop_app.py     # Windows
+venv/bin/python run_desktop_app.py         # macOS / Linux
 ```
 
-On macOS / Linux:
+On first launch, a setup wizard walks you through pointing CHAOS at your captures folder.
 
-```bash
-source venv/bin/activate
-```
+### Command line
 
-#### 2. Configure the System:
-
-Open the config.yaml file and edit the settings, especially the captures_folder path, to match your system.
-
-#### 3. Run the Pipeline:
-
-Now you can execute the different stages of the CHAOS pipeline. On macOS/Linux, you may need to use python3 instead of python.
+The pipeline can also run headless. Activate the venv first (`venv\Scripts\activate` on Windows, `source venv/bin/activate` elsewhere), and set `captures_folder` in `config.yaml`.
 
 Run the entire pipeline from start to finish:
 

@@ -25,16 +25,14 @@ class AdvancedTab(QWidget):
     def init_ui(self):
         """Initialize the user interface."""
         layout = QVBoxLayout()
-        
-        # Title
-        title = QLabel("Advanced Settings")
-        title.setFont(QFont("Arial", 16, QFont.Weight.Bold))
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(title)
-        
-        # Warning
-        warning = QLabel("These settings are for advanced users. Incorrect values may cause detection issues.")
-        warning.setStyleSheet("color: #ff9800; font-weight: bold; padding: 10px; background-color: #fff3cd; border: 1px solid #ffeaa7; border-radius: 5px;")
+        layout.setContentsMargins(20, 16, 20, 0)
+        layout.setSpacing(10)
+
+        # Warning (the tab name already says "Advanced", so no separate title)
+        warning = QLabel("Detection tuning for advanced users. Wrong values can make CHAOS miss kills; "
+                         "use Reset to Defaults below if detection gets worse.")
+        warning.setStyleSheet("color: #e8963c; font-size: 12px; padding: 8px 12px; background-color: #2a1f0f; "
+                              "border: 1px solid #5c3d16; border-radius: 4px;")
         warning.setWordWrap(True)
         layout.addWidget(warning)
         
@@ -80,7 +78,7 @@ class AdvancedTab(QWidget):
         
         # Red HSV Range 1
         red1_layout = QHBoxLayout()
-        red1_layout.addWidget(QLabel("Red HSV Range 1:"))
+        red1_layout.addWidget(self._row_label("Red HSV Range 1:"))
         
         self.red_h_lower1 = self.create_hsv_slider("H Lower", 0, 180, 0)
         self.red_s_lower1 = self.create_hsv_slider("S Lower", 0, 255, 120)
@@ -102,7 +100,7 @@ class AdvancedTab(QWidget):
         
         # Red HSV Range 2
         red2_layout = QHBoxLayout()
-        red2_layout.addWidget(QLabel("Red HSV Range 2:"))
+        red2_layout.addWidget(self._row_label("Red HSV Range 2:"))
         
         self.red_h_lower2 = self.create_hsv_slider("H Lower", 0, 180, 170)
         self.red_s_lower2 = self.create_hsv_slider("S Lower", 0, 255, 120)
@@ -124,7 +122,7 @@ class AdvancedTab(QWidget):
         
         # T-side Orange Range
         t_layout = QHBoxLayout()
-        t_layout.addWidget(QLabel("T-side Orange Range:"))
+        t_layout.addWidget(self._row_label("T-side Orange Range:"))
         
         self.t_h_lower = self.create_hsv_slider("H Lower", 0, 180, 10)
         self.t_s_lower = self.create_hsv_slider("S Lower", 0, 255, 150)
@@ -146,7 +144,7 @@ class AdvancedTab(QWidget):
         
         # CT-side Blue Range
         ct_layout = QHBoxLayout()
-        ct_layout.addWidget(QLabel("CT-side Blue Range:"))
+        ct_layout.addWidget(self._row_label("CT-side Blue Range:"))
         
         self.ct_h_lower = self.create_hsv_slider("H Lower", 0, 180, 100)
         self.ct_s_lower = self.create_hsv_slider("S Lower", 0, 255, 150)
@@ -313,26 +311,25 @@ class AdvancedTab(QWidget):
         
     def create_buttons_group(self):
         """Create the action buttons group."""
-        group = QGroupBox("Actions")
+        # Saving happens through the Settings dialog's Save button
+        group = QGroupBox("Defaults")
         layout = QHBoxLayout()
-        
-        self.save_btn = QPushButton("Save Settings")
-        self.save_btn.clicked.connect(self.save_settings)
-        layout.addWidget(self.save_btn)
-        
+
         self.reset_btn = QPushButton("Reset to Defaults")
         self.reset_btn.clicked.connect(self.reset_to_defaults)
         layout.addWidget(self.reset_btn)
-        
-        self.test_btn = QPushButton("Test Settings")
-        self.test_btn.clicked.connect(self.test_settings)
-        layout.addWidget(self.test_btn)
-        
+
         layout.addStretch()
         
         group.setLayout(layout)
         return group
         
+    def _row_label(self, text):
+        """Fixed-width label so every row's sliders start in the same column."""
+        lbl = QLabel(text)
+        lbl.setFixedWidth(140)
+        return lbl
+
     def create_hsv_slider(self, label, min_val, max_val, default_val):
         """Create an HSV parameter slider."""
         container = QFrame()
@@ -341,7 +338,7 @@ class AdvancedTab(QWidget):
         
         label_widget = QLabel(label)
         label_widget.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        label_widget.setStyleSheet("font-size: 10px; color: #666;")
+        label_widget.setStyleSheet("font-size: 10px; color: #6b7280;")
         layout.addWidget(label_widget)
         
         slider = QSlider(Qt.Orientation.Horizontal)
@@ -391,10 +388,11 @@ class AdvancedTab(QWidget):
         
         return container
         
-    def load_config(self):
-        """Load configuration and update UI."""
+    def load_config(self, config: dict = None):
+        """Update the UI from `config`, or from the saved configuration."""
         try:
-            config = self.config_manager.load_config()
+            if config is None:
+                config = self.config_manager.load_config()
             
             # Load color detection parameters
             red_lower1 = config.get('red_hsv_lower1', [0, 120, 70])
@@ -458,8 +456,9 @@ class AdvancedTab(QWidget):
         except Exception as e:
             QMessageBox.warning(self, "Load Error", f"Failed to load advanced settings: {str(e)}")
             
-    def save_settings(self):
-        """Save current settings to configuration."""
+    def save_settings(self, quiet: bool = False) -> bool:
+        """Save current settings to configuration. `quiet` skips the success
+        popup, for when the Settings dialog's own Save button calls this."""
         try:
             config = self.config_manager.load_config()
             
@@ -532,35 +531,30 @@ class AdvancedTab(QWidget):
             
             # Save configuration
             if self.config_manager.save_config(config):
-                QMessageBox.information(self, "Success", "Advanced settings saved successfully!")
+                if not quiet:
+                    QMessageBox.information(self, "Success", "Advanced settings saved successfully!")
                 self.config_changed.emit(config)
-            else:
-                QMessageBox.warning(self, "Error", "Failed to save advanced settings.")
-                
+                return True
+            QMessageBox.warning(self, "Error", "Failed to save advanced settings.")
+            return False
+
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save advanced settings: {str(e)}")
-            
+            return False
+
     def reset_to_defaults(self):
-        """Reset all settings to defaults."""
+        """Fill the sliders with default values; Save in the dialog keeps them."""
         reply = QMessageBox.question(
-            self, 
-            "Reset to Defaults", 
-            "Are you sure you want to reset all advanced settings to defaults?",
+            self,
+            "Reset to Defaults",
+            "Put every advanced setting back to its default?\n"
+            "Nothing changes until you click Save.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
-        
+
         if reply == QMessageBox.StandardButton.Yes:
-            try:
-                default_config = self.config_manager.reset_to_defaults()
-                self.load_config()
-                QMessageBox.information(self, "Reset Complete", "Advanced settings have been reset to defaults.")
-            except Exception as e:
-                QMessageBox.critical(self, "Reset Error", f"Failed to reset settings: {str(e)}")
-                
-    def test_settings(self):
-        """Test current settings."""
-        QMessageBox.information(self, "Test Settings", "Settings testing will be implemented in future versions.")
-        
+            self.load_config(self.config_manager.reset_to_defaults())
+
     def on_config_changed(self):
         """Handle configuration changes."""
         # This could be used to show unsaved changes indicator

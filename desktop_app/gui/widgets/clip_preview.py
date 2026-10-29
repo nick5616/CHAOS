@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QSizePolicy, QStackedWidget, QGraphicsOpacityEffect, QToolTip,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QUrl, QTimer, QPropertyAnimation
+from PyQt6.QtCore import Qt, pyqtSignal, QUrl, QTimer, QPropertyAnimation, QEvent
 from PyQt6.QtGui import QPixmap, QImage, QPainter, QColor, QPen, QBrush, QPainterPath
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PyQt6.QtMultimediaWidgets import QVideoWidget
@@ -361,6 +361,10 @@ class ClipPreviewWidget(QWidget):
         self.video_display.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
+        # Re-scale the still frame when the label itself resizes. This widget's
+        # own resizeEvent fires before the layout has resized the label, so
+        # scaling there used the old size and left the frame cropped on shrink.
+        self.video_display.installEventFilter(self)
         self._display_stack.addWidget(self.video_display)
 
         self._video_widget = QVideoWidget()
@@ -672,9 +676,13 @@ class ClipPreviewWidget(QWidget):
             f"{int(ds // 60)}:{int(ds % 60):02d}"
         )
 
+    def eventFilter(self, obj, event):
+        if obj is self.video_display and event.type() == QEvent.Type.Resize:
+            if self._display_stack.currentIndex() == 0 and self._first_frame:
+                self._render_first_frame()
+        return super().eventFilter(obj, event)
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if self._display_stack.currentIndex() == 0 and self._first_frame:
-            self._render_first_frame()
         if self._overlay.isVisible():
             self._reposition_overlay()

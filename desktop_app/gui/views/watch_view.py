@@ -204,8 +204,9 @@ class _ExportWorker(QThread):
                 for path in self.clip_paths:
                     f.write(f"file '{path.replace(chr(92), chr(47))}'\n")
 
+            from chaos_lib.clipper import _get_ffmpeg
             result = subprocess.run(
-                ["ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                [_get_ffmpeg(), "-y", "-f", "concat", "-safe", "0",
                  "-i", concat_file, "-c", "copy", self.output_path],
                 capture_output=True, text=True,
             )
@@ -249,59 +250,77 @@ class WatchView(QWidget):
         root.setSpacing(0)
 
         # Controls bar
+        # ID selectors so the border doesn't cascade into the labels (QLabel is a QFrame)
         ctrl_bar = QFrame()
+        ctrl_bar.setObjectName("watchCtrlBar")
         ctrl_bar.setStyleSheet(
-            "QFrame { background: #12151a; border-bottom: 1px solid #2a2d35; }"
+            "#watchCtrlBar { background: #12151a; border-bottom: 1px solid #2a2d35; }"
         )
         ctrl_bar.setFixedHeight(52)
         ctrl_layout = QHBoxLayout(ctrl_bar)
         ctrl_layout.setContentsMargins(16, 0, 16, 0)
         ctrl_layout.setSpacing(8)
 
+        _small = "QPushButton { font-size: 12px; padding: 5px 12px; min-width: 0; }"
         self._prev_btn = QPushButton("◀  Prev")
+        self._prev_btn.setStyleSheet(_small)
         self._prev_btn.clicked.connect(self._prev_clip)
         ctrl_layout.addWidget(self._prev_btn)
 
+        # Accent-coloured like the run button, but sized to fit the bar
         self._play_seq_btn = QPushButton("▶  Play All")
-        self._play_seq_btn.setObjectName("runButton")
+        self._play_seq_btn.setStyleSheet(
+            "QPushButton { background: #e8963c; color: #0f1014; border: none; border-radius: 4px;"
+            " font-size: 12px; font-weight: bold; padding: 6px 18px; min-width: 0; }"
+            "QPushButton:hover { background: #d4822a; color: #0f1014; }"
+            "QPushButton:disabled { background: #2a2d35; color: #4a4d55; }"
+        )
         self._play_seq_btn.clicked.connect(self._toggle_sequence)
         ctrl_layout.addWidget(self._play_seq_btn)
 
         self._next_btn = QPushButton("Next  ▶")
+        self._next_btn.setStyleSheet(_small)
         self._next_btn.clicked.connect(self._next_clip)
         ctrl_layout.addWidget(self._next_btn)
 
-        ctrl_layout.addStretch()
+        ctrl_layout.addSpacing(12)
 
-        self._clip_label = QLabel("No clips loaded — run the pipeline first")
-        self._clip_label.setStyleSheet("color: #6b7280; font-size: 12px;")
-        ctrl_layout.addWidget(self._clip_label)
+        self._clip_label = QLabel("No clips loaded. Run the pipeline first.")
+        self._clip_label.setStyleSheet("color: #9ca3af; font-size: 12px;")
+        ctrl_layout.addWidget(self._clip_label, 1)
 
-        ctrl_layout.addStretch()
-
-        self._export_btn = QPushButton("↗  Export Sequence")
+        self._export_btn = QPushButton("Export as one video…")
+        self._export_btn.setStyleSheet(_small)
+        self._export_btn.setToolTip("Join the clips in timeline order into a single MP4")
         self._export_btn.clicked.connect(self._export_sequence)
         ctrl_layout.addWidget(self._export_btn)
 
         root.addWidget(ctrl_bar)
 
-        # Video player
+        # Video player, inset so its controls don't touch the window edges
+        player_box = QWidget()
+        player_layout = QVBoxLayout(player_box)
+        player_layout.setContentsMargins(16, 12, 16, 10)
         self._preview = ClipPreviewWidget()
         self._preview.clip_ended.connect(self._on_clip_ended)
         self._preview.player.positionChanged.connect(self._on_player_position)
-        root.addWidget(self._preview, 1)
+        player_layout.addWidget(self._preview)
+        root.addWidget(player_box, 1)
 
         # Timeline
         tl_frame = QFrame()
+        tl_frame.setObjectName("watchTimeline")
         tl_frame.setStyleSheet(
-            "QFrame { background: #0f1014; border-top: 1px solid #2a2d35; }"
+            "#watchTimeline { background: #0f1014; border-top: 1px solid #2a2d35; }"
         )
         tl_layout = QVBoxLayout(tl_frame)
-        tl_layout.setContentsMargins(10, 6, 10, 6)
+        tl_layout.setContentsMargins(16, 8, 16, 6)
         tl_layout.setSpacing(4)
 
-        tl_header = QLabel("Timeline  —  drag clips to reorder")
-        tl_header.setStyleSheet("color: #6b7280; font-size: 11px; background: transparent;")
+        tl_header = QLabel("TIMELINE    <span style='color:#4b5563; font-weight:normal;"
+                           " letter-spacing:0'>Drag clips to change the order.</span>")
+        tl_header.setStyleSheet("color: #6b7280; font-size: 10px; font-weight: bold;"
+                                " letter-spacing: 2px; background: transparent;")
         tl_layout.addWidget(tl_header)
 
         self._timeline = _TimelineWidget()
@@ -317,7 +336,7 @@ class WatchView(QWidget):
         self._timeline.setSpacing(0)
         self._timeline.setUniformItemSizes(True)
         self._timeline.setFixedHeight(CARD_H + 24)
-        self._timeline.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self._timeline.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._timeline.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._timeline.setItemDelegate(ClipCardDelegate(self._timeline))
         self._timeline.setStyleSheet(
@@ -331,7 +350,7 @@ class WatchView(QWidget):
         self._timeline.model().rowsMoved.connect(self._sync_current_index)
         tl_layout.addWidget(self._timeline)
 
-        tl_frame.setFixedHeight(CARD_H + 44)
+        tl_frame.setFixedHeight(CARD_H + 48)
         root.addWidget(tl_frame)
 
     # ------------------------------------------------------------------ load
@@ -363,14 +382,22 @@ class WatchView(QWidget):
                 for i, clip in enumerate(highlights):
                     score = clip.get("score", 0)
                     path = None
-                    for pattern in [
-                        os.path.join(clips_folder, f"{i+1}_{score}_*.mp4"),
-                        os.path.join(clips_folder, f"{i+1}_*.mp4"),
-                    ]:
-                        matches = glob.glob(pattern)
-                        if matches:
-                            path = matches[0]
-                            break
+                    # clip_filename is recorded when the clip is cut. Clips are
+                    # cut as each video finishes, not in rank order, so the
+                    # rank-number pattern is only a fallback for old results.
+                    clip_filename = clip.get("clip_filename")
+                    if clip_filename:
+                        candidate = os.path.join(clips_folder, clip_filename)
+                        path = candidate if os.path.exists(candidate) else None
+                    else:
+                        for pattern in [
+                            os.path.join(clips_folder, f"{i+1}_{score}_*.mp4"),
+                            os.path.join(clips_folder, f"{i+1}_*.mp4"),
+                        ]:
+                            matches = glob.glob(pattern)
+                            if matches:
+                                path = matches[0]
+                                break
                     if path:
                         entries.append({
                             "path": path,
@@ -419,7 +446,7 @@ class WatchView(QWidget):
             self._thumb_worker.thumbnail_ready.connect(self._on_thumbnail_ready)
             self._thumb_worker.start()
         else:
-            self._clip_label.setText("No clips found — run the pipeline first")
+            self._clip_label.setText("No clips found. Run the pipeline first.")
 
     def _on_thumbnail_ready(self, path: str, icon: QIcon) -> None:
         for i in range(self._timeline.count()):
@@ -548,7 +575,7 @@ class WatchView(QWidget):
 
     def _on_export_done(self, success: bool, msg: str):
         self._export_btn.setEnabled(True)
-        self._export_btn.setText("↗  Export Sequence")
+        self._export_btn.setText("Export as one video…")
         if success:
             QMessageBox.information(self, "Export complete", f"Saved to:\n{msg}")
         else:

@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 
 from desktop_app.gui.utils.config_manager import ConfigManager
+from desktop_app.gui.utils.formatting import recording_title, fmt_clock
 from desktop_app.gui.widgets.clip_preview import ClipPreviewWidget, kill_flags
 
 
@@ -58,8 +59,10 @@ def _make_chip(tag: str) -> QLabel:
         tag, (tag.upper().replace("_", " "), "#c8ccd4", "#1a1d23")
     )
     chip = QLabel(label)
+    # Qt reads 8-digit hex as #AARRGGBB, so give the faint border as rgba()
+    r, g, b = (int(fg[i:i + 2], 16) for i in (1, 3, 5))
     chip.setStyleSheet(
-        f"color: {fg}; background: {bg}; border: 1px solid {fg}50;"
+        f"color: {fg}; background: {bg}; border: 1px solid rgba({r}, {g}, {b}, 80);"
         f"border-radius: 3px; padding: 2px 8px;"
         f"font-size: 10px; font-weight: bold; letter-spacing: 1px;"
     )
@@ -97,8 +100,8 @@ class ResultsView(QWidget):
         toolbar = QHBoxLayout()
         toolbar.setSpacing(8)
 
-        self._count_label = QLabel("No clips yet — run the pipeline to find highlights")
-        self._count_label.setStyleSheet("color: #6b7280; font-size: 12px;")
+        self._count_label = QLabel("No clips yet. Run the pipeline to find highlights.")
+        self._count_label.setStyleSheet("color: #c8ccd4; font-size: 13px; font-weight: bold;")
         toolbar.addWidget(self._count_label)
 
         self._ratio_label = QLabel("")
@@ -112,13 +115,15 @@ class ResultsView(QWidget):
 
         toolbar.addStretch()
 
-        refresh_btn = QPushButton("↺  REFRESH")
-        refresh_btn.setStyleSheet("font-size: 11px; letter-spacing: 1px; padding: 5px 14px;")
+        _small = "QPushButton { font-size: 12px; padding: 4px 12px; min-width: 0; }"
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.setStyleSheet(_small)
+        refresh_btn.setToolTip("Reload the results of the last run")
         refresh_btn.clicked.connect(self.load_results)
         toolbar.addWidget(refresh_btn)
 
-        open_btn = QPushButton("FOLDER  ↗")
-        open_btn.setStyleSheet("font-size: 11px; letter-spacing: 1px; padding: 5px 14px;")
+        open_btn = QPushButton("Open clips folder")
+        open_btn.setStyleSheet(_small)
         open_btn.clicked.connect(self._open_folder)
         toolbar.addWidget(open_btn)
 
@@ -146,7 +151,7 @@ class ResultsView(QWidget):
         self._clips_list = QListWidget()
         self._clips_list.setStyleSheet(
             "QListWidget { border: 1px solid #1e2128; background: #0a0c10; border-radius: 4px; }"
-            "QListWidget::item { padding: 9px 12px; border-bottom: 1px solid #131519; }"
+            "QListWidget::item { padding: 8px 12px; border-bottom: 1px solid #131519; }"
             "QListWidget::item:selected { background: #1c2028; color: #e8963c; border-left: 2px solid #e8963c; padding-left: 10px; }"
             "QListWidget::item:hover:!selected { background: #131519; }"
         )
@@ -160,11 +165,12 @@ class ResultsView(QWidget):
         self._chip_row = QHBoxLayout()
         self._chip_row.setSpacing(5)
         self._chip_row.setContentsMargins(0, 2, 0, 2)
-        chip_container = QWidget()
-        chip_container.setLayout(self._chip_row)
-        chip_container.setStyleSheet("background: transparent;")
-        chip_container.setFixedHeight(28)
-        left_layout.addWidget(chip_container)
+        self._chip_container = QWidget()
+        self._chip_container.setLayout(self._chip_row)
+        self._chip_container.setStyleSheet("background: transparent;")
+        self._chip_container.setFixedHeight(28)
+        self._chip_container.setVisible(False)   # shown when the clip has tags
+        left_layout.addWidget(self._chip_container)
 
         # Details text (rich text, scrollable; "… more events" link expands in place)
         self._details_expanded = False
@@ -213,7 +219,8 @@ class ResultsView(QWidget):
     def load_results(self):
         try:
             config = self.config_manager.load_config()
-            data_folder = config.get("data_folder", "./data")
+            # Relative to the project root like the pipeline writes it, not the cwd
+            data_folder = self.config_manager.resolve_path(config.get("data_folder", "./data"))
             highlights_path = os.path.join(data_folder, "ordered_highlights.json")
 
             if os.path.exists(highlights_path):
@@ -248,21 +255,35 @@ class ResultsView(QWidget):
         self._clips_list.clear()
 
         if not self.clips_data:
-            self._count_label.setText("No highlights found — run the pipeline first")
+            self._count_label.setText("No highlights yet. Run the pipeline to find some.")
+            self._clear_details()
+            self._preview.clear()
+            self._preview_name_lbl.setText("")
             return
 
         for i, clip in enumerate(self.clips_data):
             score = clip.get("score", 0)
             tags = clip.get("tags", [])
             tag_display = (
-                "  ·  " + "  ·  ".join(
+                "   " + "  ·  ".join(
                     _TAG_STYLE.get(t, (t.upper().replace("_", " "), "", ""))[0]
                     for t in tags
                 )
                 if tags else ""
             )
-            text = f"#{i+1:02d}  ·  {score} pts{tag_display}"
+            # Second line: which recording, how long, what happened
+            meta = [recording_title(clip.get("source_video", ""))]
+            length = float(clip.get("clip_end", 0)) - float(clip.get("clip_start", 0))
+            if length > 0:
+                meta.append(fmt_clock(length))
+            kills = sum(1 for e in clip.get("events_in_window", []) if e.get("type") == "kill")
+            if kills:
+                meta.append(f"{kills} kill{'s' if kills != 1 else ''}")
+            elif clip.get("kind") in ("funny", "conversation"):
+                meta.append("voice chat")
+            text = f"#{i+1:02d}   {score} pts{tag_display}\n" + "  ·  ".join(meta)
             item = QListWidgetItem(text)
+            item.setToolTip(os.path.basename(clip.get("source_video", "")))
             item.setData(Qt.ItemDataRole.UserRole, clip)
             self._clips_list.addItem(item)
 
@@ -288,6 +309,7 @@ class ResultsView(QWidget):
         while self._chip_row.count():
             w = self._chip_row.takeAt(0).widget()
             if w:
+                w.setParent(None)   # off screen now, not whenever deleteLater runs
                 w.deleteLater()
         self._details_text.clear()
 
@@ -299,6 +321,7 @@ class ResultsView(QWidget):
         for tag in clip.get("tags", []):
             self._chip_row.addWidget(_make_chip(tag))
         self._chip_row.addStretch()
+        self._chip_container.setVisible(bool(clip.get("tags")))
 
         # Text details (rich HTML)
         source = os.path.basename(clip.get("source_video", "Unknown"))

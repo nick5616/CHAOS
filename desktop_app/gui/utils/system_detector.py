@@ -36,10 +36,11 @@ class SystemDetector:
         Returns:
             Tuple of (is_available, version_string_or_path)
         """
+        from chaos_lib.clipper import _get_ffmpeg
         try:
             # Try to run ffmpeg -version
             result = subprocess.run(
-                ['ffmpeg', '-version'],
+                [_get_ffmpeg(), '-version'],
                 capture_output=True,
                 text=True,
                 timeout=10
@@ -152,6 +153,36 @@ class SystemDetector:
             return {'present': False, 'name': None, 'driver_version': None, 'max_cuda_version': None, 'error': str(e)}
 
     @staticmethod
+    def pick_cuda_wheel_tag(max_cuda_version: Optional[str]) -> Optional[str]:
+        """Newest PyTorch CUDA wheel tag (e.g. "cu128") the driver can run.
+
+        Args:
+            max_cuda_version: The highest CUDA version the installed NVIDIA
+                driver supports, as reported by nvidia-smi.
+
+        Returns:
+            The wheel tag, or None if there is no driver or it is too old for
+            any currently-supported PyTorch CUDA build.
+        """
+        if not max_cuda_version:
+            return None
+        try:
+            bits = max_cuda_version.split('.')
+            version = (int(bits[0]), int(bits[1]) if len(bits) > 1 else 0)
+        except (ValueError, IndexError):
+            return None
+
+        if version >= (12, 9):
+            return "cu129"
+        if version >= (12, 8):
+            return "cu128"
+        if version >= (12, 6):
+            return "cu126"
+        if version >= (11, 8):
+            return "cu118"
+        return None
+
+    @staticmethod
     def get_pytorch_install_command(max_cuda_version: Optional[str] = None) -> str:
         """Get the appropriate PyTorch installation command.
 
@@ -166,30 +197,9 @@ class SystemDetector:
         if max_cuda_version is None:
             max_cuda_version = SystemDetector.detect_nvidia_gpu().get('max_cuda_version')
 
-        def _version_tuple(v: str) -> tuple:
-            try:
-                bits = v.split('.')
-                return (int(bits[0]), int(bits[1]) if len(bits) > 1 else 0)
-            except (ValueError, IndexError):
-                return (0, 0)
-
-        if not max_cuda_version:
-            # No NVIDIA driver detected - CPU-only version
-            return "pip install torch torchvision torchaudio"
-
-        version = _version_tuple(max_cuda_version)
-
-        # Pick the newest CUDA wheel tag the installed driver can run.
-        if version >= (12, 9):
-            tag = "cu129"
-        elif version >= (12, 8):
-            tag = "cu128"
-        elif version >= (12, 6):
-            tag = "cu126"
-        elif version >= (11, 8):
-            tag = "cu118"
-        else:
-            # Driver too old for any currently-supported PyTorch CUDA build
+        tag = SystemDetector.pick_cuda_wheel_tag(max_cuda_version)
+        if tag is None:
+            # No NVIDIA driver, or one too old for any CUDA build - CPU-only version
             return "pip install torch torchvision torchaudio"
 
         # --force-reinstall is required: if a CPU build is already installed, it
@@ -348,6 +358,17 @@ class SystemDetector:
                 return False, "No suitable package manager found. Please install FFmpeg manually."
             
             elif system == "windows":
+                if shutil.which("winget"):
+                    result = subprocess.run(
+                        ["winget", "install", "-e", "--id", "Gyan.FFmpeg",
+                         "--accept-package-agreements", "--accept-source-agreements", "--silent"],
+                        capture_output=True,
+                        text=True,
+                        timeout=600
+                    )
+                    if SystemDetector.check_ffmpeg()[0]:
+                        return True, "FFmpeg installed successfully via winget"
+                    return False, f"winget installation failed: {result.stdout or result.stderr}"
                 return False, "Please install FFmpeg manually on Windows. Download from https://ffmpeg.org/download.html"
             
             else:

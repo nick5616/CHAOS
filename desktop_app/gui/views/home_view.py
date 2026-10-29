@@ -76,7 +76,7 @@ from PyQt6.QtWidgets import (
     QRadioButton, QButtonGroup, QListWidget, QListWidgetItem,
     QStackedWidget, QFrame, QSizePolicy, QScrollArea, QGridLayout, QMessageBox,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QThread, QTimer, QRectF
+from PyQt6.QtCore import Qt, pyqtSignal, QThread, QTimer, QRectF, QEvent
 from PyQt6.QtGui import QPixmap, QImage, QPainter, QPen, QColor
 
 from desktop_app.gui.widgets.log_viewer import LogViewer
@@ -84,6 +84,7 @@ from desktop_app.gui.widgets.animated_pipeline import AnimatedPipelineWidget
 from desktop_app.workers.pipeline_worker import PipelineWorker
 from chaos_lib.resources import plan_analysis_workers
 from desktop_app.gui.utils.config_manager import ConfigManager
+from desktop_app.gui.utils.formatting import recording_title, fmt_clock
 from desktop_app.gui.utils.system_detector import SystemDetector
 
 ALL_STAGES = ["ingest", "analyze", "correlate", "clip", "summary"]
@@ -92,9 +93,10 @@ ALL_STAGES = ["ingest", "analyze", "correlate", "clip", "summary"]
 class _ThumbnailWorker(QThread):
     """Extract a representative frame from each video in a background thread.
 
-    Emits QImage (not QPixmap) because QPixmap must be created on the GUI thread.
+    Emits QImage (not QPixmap) because QPixmap must be created on the GUI thread,
+    plus the video's duration in seconds (0 when unknown).
     """
-    thumbnail_ready = pyqtSignal(str, QImage)
+    thumbnail_ready = pyqtSignal(str, QImage, float)
 
     def __init__(self, paths: list[str], tw: int, th: int):
         super().__init__()
@@ -109,22 +111,24 @@ class _ThumbnailWorker(QThread):
         for path in self._paths:
             if self._cancelled:
                 break
-            img = self._grab_frame(path)
+            img, duration = self._grab_frame(path)
             if img is not None:
-                self.thumbnail_ready.emit(path, img)
+                self.thumbnail_ready.emit(path, img, duration)
 
-    def _grab_frame(self, path: str) -> "QImage | None":
+    def _grab_frame(self, path: str) -> "tuple[QImage | None, float]":
         try:
             cap = cv2.VideoCapture(path)
             if not cap.isOpened():
-                return None
+                return None, 0.0
             total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            duration = total / fps if fps > 0 and total > 0 else 0.0
             if total > 30:
                 cap.set(cv2.CAP_PROP_POS_FRAMES, min(total // 10, total - 1))
             ret, frame = cap.read()
             cap.release()
             if not ret:
-                return None
+                return None, duration
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             h, w = rgb.shape[:2]
             img = QImage(rgb.tobytes(), w, h, 3 * w, QImage.Format.Format_RGB888)
@@ -132,9 +136,9 @@ class _ThumbnailWorker(QThread):
                 self._tw, self._th,
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
-            )
+            ), duration
         except Exception:
-            return None
+            return None, 0.0
 
 
 class _HoverPreviewWorker(QThread):
@@ -210,20 +214,49 @@ class _ThumbLabel(QLabel):
     def __init__(self):
         super().__init__()
         self._zoom_rect: "QRectF | None" = None
+        self._badge = ""
+        self._dimmed = False
 
     def set_zoom_rect(self, rect: "QRectF | None") -> None:
         self._zoom_rect = rect
         self.update()
 
+    def set_badge(self, text: str) -> None:
+        """Small label in the bottom-right corner (the video's duration)."""
+        self._badge = text
+        self.update()
+
+    def set_dimmed(self, dimmed: bool) -> None:
+        """Darken the image, for clips left out of the run."""
+        self._dimmed = dimmed
+        self.update()
+
     def paintEvent(self, event) -> None:
         super().paintEvent(event)
-        if self._zoom_rect is None:
+        if not self._badge and not self._dimmed and self._zoom_rect is None:
             return
         painter = QPainter(self)
-        pen = QPen(QColor("#e8963c"))
-        pen.setWidth(2)
-        painter.setPen(pen)
-        painter.drawRect(self._zoom_rect)
+        if self._dimmed:
+            painter.fillRect(self.rect(), QColor(15, 16, 20, 170))
+        if self._badge:
+            font = painter.font()
+            font.setPixelSize(10)
+            font.setBold(True)
+            painter.setFont(font)
+            fm = painter.fontMetrics()
+            w, h = fm.horizontalAdvance(self._badge) + 8, fm.height() + 2
+            box = QRectF(self.width() - w - 3, self.height() - h - 3, w, h)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(0, 0, 0, 180))
+            painter.drawRoundedRect(box, 2, 2)
+            painter.setPen(QColor("#e6edf3"))
+            painter.drawText(box, Qt.AlignmentFlag.AlignCenter, self._badge)
+        if self._zoom_rect is not None:
+            pen = QPen(QColor("#e8963c"))
+            pen.setWidth(2)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(self._zoom_rect)
 
 
 class _ThumbnailCard(QFrame):
@@ -269,19 +302,36 @@ class _ThumbnailCard(QFrame):
         )
         layout.addWidget(self._img)
 
-        name_lbl = QLabel()
-        fm = name_lbl.fontMetrics()
-        elided = fm.elidedText(os.path.basename(path), Qt.TextElideMode.ElideRight, tw)
-        name_lbl.setText(elided)
-        name_lbl.setToolTip(path)
-        name_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        name_lbl.setStyleSheet("color: #6b7280; font-size: 10px;")
-        layout.addWidget(name_lbl)
+        # Recording date/time on the left, file size on the right
+        info_row = QHBoxLayout()
+        info_row.setContentsMargins(1, 0, 1, 0)
+        info_row.setSpacing(4)
+        try:
+            size_text = _fmt_size(os.path.getsize(path))
+        except OSError:
+            size_text = ""
+        size_lbl = QLabel(size_text)
+        size_lbl.setStyleSheet("color: #4b5563; font-size: 10px; background: transparent;")
+        self._name_lbl = QLabel()
+        self._name_lbl.setStyleSheet("color: #9ca3af; font-size: 11px; background: transparent;")
+        title_w = tw - size_lbl.fontMetrics().horizontalAdvance(size_text) - 8
+        self._name_lbl.setText(self._name_lbl.fontMetrics().elidedText(
+            recording_title(path), Qt.TextElideMode.ElideMiddle, max(40, title_w)))
+        info_row.addWidget(self._name_lbl, 1)
+        info_row.addWidget(size_lbl)
+        layout.addLayout(info_row)
+        for lbl in (self._name_lbl, size_lbl):
+            lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+        self.setToolTip(f"{os.path.basename(path)}\n"
+                        "Hover to preview at 10x speed. Click to include or leave out.")
 
         self._apply_border()
 
-    def set_thumbnail(self, img: QImage) -> None:
+    def set_thumbnail(self, img: QImage, duration: float = 0.0) -> None:
         self._img.setText("")
+        if duration > 0:
+            self._img.set_badge(fmt_clock(duration))
         self._thumb_pixmap = QPixmap.fromImage(img)
         if self._preview_worker is None:
             self._img.setPixmap(self._thumb_pixmap)
@@ -400,8 +450,11 @@ class _ThumbnailCard(QFrame):
             self.toggled.emit(self._path, self._selected)
 
     def _apply_border(self) -> None:
-        color = "#e8963c" if self._selected else "transparent"
+        color = "#e8963c" if self._selected else "#1e2128"
         self.setStyleSheet(f"#thumbCard {{ border: 2px solid {color}; border-radius: 4px; }}")
+        self._img.set_dimmed(not self._selected)
+        self._name_lbl.setStyleSheet(
+            f"color: {'#9ca3af' if self._selected else '#4b5563'}; font-size: 11px; background: transparent;")
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -416,14 +469,15 @@ class ClipThumbnailGrid(QWidget):
     zoom_updated = pyqtSignal(QImage)
     zoom_ended = pyqtSignal()
 
-    _COLS = 4
     _TW = 160
     _TH = 90  # 16:9
+    _SPACING = 6
 
     def __init__(self):
         super().__init__()
         self._worker: _ThumbnailWorker | None = None
         self._cards: dict[str, _ThumbnailCard] = {}
+        self._cols = 0
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -435,13 +489,37 @@ class ClipThumbnailGrid(QWidget):
 
         self._inner = QWidget()
         self._grid_layout = QGridLayout(self._inner)
-        self._grid_layout.setSpacing(6)
+        self._grid_layout.setSpacing(self._SPACING)
         self._grid_layout.setContentsMargins(6, 6, 6, 6)
-        self._grid_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self._grid_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
         self._scroll.setWidget(self._inner)
         outer.addWidget(self._scroll)
+        # Reflow the columns whenever the visible width changes
+        self._scroll.viewport().installEventFilter(self)
 
         self.setVisible(False)
+
+    def eventFilter(self, obj, event) -> bool:
+        if obj is self._scroll.viewport() and event.type() == QEvent.Type.Resize:
+            self._reflow()
+        return super().eventFilter(obj, event)
+
+    def _fit_cols(self) -> int:
+        m = self._grid_layout.contentsMargins()
+        avail = self._scroll.viewport().width() - m.left() - m.right()
+        card_w = self._TW + 8
+        return max(1, (avail + self._SPACING) // (card_w + self._SPACING))
+
+    def _reflow(self, force: bool = False) -> None:
+        cols = self._fit_cols()
+        if not self._cards or (cols == self._cols and not force):
+            return
+        self._cols = cols
+        cards = list(self._cards.values())
+        for card in cards:
+            self._grid_layout.removeWidget(card)
+        for i, card in enumerate(cards):
+            self._grid_layout.addWidget(card, i // cols, i % cols)
 
     def load_paths(self, paths: list[str]) -> None:
         if self._worker and self._worker.isRunning():
@@ -461,23 +539,23 @@ class ClipThumbnailGrid(QWidget):
             self.setVisible(False)
             return
 
-        for i, path in enumerate(paths):
+        for path in paths:
             card = _ThumbnailCard(path, self._TW, self._TH)
             card.toggled.connect(self._on_card_toggled)
             card.zoom_updated.connect(self.zoom_updated)
             card.zoom_ended.connect(self.zoom_ended)
-            self._grid_layout.addWidget(card, i // self._COLS, i % self._COLS)
             self._cards[path] = card
 
         self.setVisible(True)
+        self._reflow(force=True)
 
         self._worker = _ThumbnailWorker(paths, self._TW, self._TH)
         self._worker.thumbnail_ready.connect(self._on_thumb)
         self._worker.start()
 
-    def _on_thumb(self, path: str, img: QImage) -> None:
+    def _on_thumb(self, path: str, img: QImage, duration: float) -> None:
         if path in self._cards:
-            self._cards[path].set_thumbnail(img)
+            self._cards[path].set_thumbnail(img, duration)
 
     def _on_card_toggled(self, _path: str, _selected: bool) -> None:
         self.selection_changed.emit()
@@ -542,22 +620,11 @@ class ClipSourceView(QWidget):
     # ------------------------------------------------------------------ build
 
     def _build_ui(self):
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
-
-        scroll = QScrollArea(self)
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
-
-        content = QWidget()
-        root = QVBoxLayout(content)
-        root.setContentsMargins(24, 20, 24, 16)
-        root.setSpacing(16)
-
-        scroll.setWidget(content)
-        outer.addWidget(scroll)
+        # No outer scroll area: the clip grid and file list scroll themselves,
+        # and an outer one let the names row slide off the bottom.
+        root = QVBoxLayout(self)
+        root.setContentsMargins(24, 16, 24, 16)
+        root.setSpacing(12)
 
         mode_row = QHBoxLayout()
         self._mode_group = QButtonGroup(self)
@@ -580,13 +647,17 @@ class ClipSourceView(QWidget):
         root.addWidget(self._source_stack, 1)  # fills available height
 
         names_row = QHBoxLayout()
-        names_lbl = QLabel("Your in-game name(s):")
-        names_lbl.setFixedWidth(160)
+        names_row.setSpacing(10)
+        names_lbl = QLabel("In-game name(s)")
         names_row.addWidget(names_lbl)
         self._names_edit = QLineEdit()
-        self._names_edit.setPlaceholderText("donk666, altName, smurf  (comma-separated)")
+        self._names_edit.setPlaceholderText(
+            "Optional. Read from the killfeed automatically. Comma-separated, e.g. donk666, altName")
+        self._names_edit.setToolTip(
+            "CHAOS works out your name from each video's killfeed.\n"
+            "Names here only help short clips with too few of your kills to tell.")
         self._names_edit.textChanged.connect(self._on_names_changed)
-        names_row.addWidget(self._names_edit)
+        names_row.addWidget(self._names_edit, 1)
         root.addLayout(names_row)
 
     def _build_folder_panel(self):
@@ -620,16 +691,31 @@ class ClipSourceView(QWidget):
         layout.addLayout(size_row)
 
         grid_row = QHBoxLayout()
-        grid_row.setSpacing(10)
+        grid_row.setSpacing(12)
 
         self._thumb_grid = ClipThumbnailGrid()
         self._thumb_grid.selection_changed.connect(self._on_clip_selection_changed)
         grid_row.addWidget(self._thumb_grid, 1)
 
+        side = QVBoxLayout()
+        side.setSpacing(10)
         self._zoom_panel = _ZoomPreviewPanel()
         self._thumb_grid.zoom_updated.connect(self._zoom_panel.set_image)
         self._thumb_grid.zoom_ended.connect(self._zoom_panel.clear)
-        grid_row.addWidget(self._zoom_panel, 0, Qt.AlignmentFlag.AlignTop)
+        side.addWidget(self._zoom_panel)
+
+        help_lbl = QLabel(
+            "Hover a clip to play it at 10x speed. Point at the killfeed "
+            "to see it magnified here.\n\n"
+            "Every clip starts included. Click one to leave it out of the run, "
+            "click again to bring it back."
+        )
+        help_lbl.setWordWrap(True)
+        help_lbl.setFixedWidth(self._zoom_panel.width())
+        help_lbl.setStyleSheet("color: #6b7280; font-size: 11px;")
+        side.addWidget(help_lbl)
+        side.addStretch()
+        grid_row.addLayout(side)
 
         layout.addLayout(grid_row, 1)
 
@@ -833,6 +919,7 @@ class _HardwareInfoDialog(QDialog):
         self._command = ""
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(22, 20, 22, 18)
         layout.setSpacing(10)
 
         cuda_available = system.get("cuda_available", False)
@@ -920,6 +1007,7 @@ class _HardwareInfoDialog(QDialog):
             body.setWordWrap(True)
             layout.addWidget(body)
 
+        layout.addSpacing(6)
         close_row = QHBoxLayout()
         close_row.addStretch()
         self._close_btn = QPushButton("Close")
@@ -1024,6 +1112,7 @@ class RunView(QWidget):
         self._validation_label = QLabel("")
         self._validation_label.setStyleSheet("color: #f87171; font-size: 12px;")
         self._validation_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        self._validation_label.setVisible(False)   # takes no space until there's a message
         root.addWidget(self._validation_label)
 
         self._pipeline_widget = AnimatedPipelineWidget()
@@ -1034,10 +1123,10 @@ class RunView(QWidget):
         self._ctrl_frame.setVisible(False)
         root.addWidget(self._ctrl_frame)
 
+        # The log takes whatever height is left; below its minimum the page scrolls
         self._log_viewer = LogViewer()
-        self._log_viewer.setMinimumHeight(150)
-        root.addWidget(self._log_viewer)
-        root.addStretch()
+        self._log_viewer.setMinimumHeight(220)
+        root.addWidget(self._log_viewer, 1)
 
     def _build_summary_card(self) -> QFrame:
         frame = QFrame()
@@ -1047,13 +1136,13 @@ class RunView(QWidget):
             "#summaryCard { background-color: #12151a; border-radius: 6px; border: 1px solid #2a2d35; }"
         )
         layout = QVBoxLayout(frame)
-        layout.setContentsMargins(14, 12, 14, 10)
-        layout.setSpacing(4)
+        layout.setContentsMargins(18, 14, 18, 14)
+        layout.setSpacing(6)
 
         # Headline: file count + size, hardware badge flush right
         top = QHBoxLayout()
-        self._summary_files_lbl = QLabel("—")
-        self._summary_files_lbl.setStyleSheet("font-size: 14px; font-weight: bold; color: #e6edf3;")
+        self._summary_files_lbl = QLabel("No files configured")
+        self._summary_files_lbl.setStyleSheet("font-size: 16px; font-weight: bold; color: #e6edf3;")
         top.addWidget(self._summary_files_lbl)
         top.addStretch()
         self._hw_badge = QPushButton("CPU only")
@@ -1064,75 +1153,79 @@ class RunView(QWidget):
         top.addWidget(self._hw_badge)
         layout.addLayout(top)
 
-        # Player names (clearly smaller and muted)
         self._summary_names_lbl = QLabel("Player name read from each video's killfeed")
-        self._summary_names_lbl.setStyleSheet("font-size: 11px; color: #6b7280;")
+        self._summary_names_lbl.setStyleSheet("font-size: 12px; color: #6b7280;")
         layout.addWidget(self._summary_names_lbl)
 
-        # Footer: output path + open button on left, workers stepper on right
-        bot = QHBoxLayout()
-        bot.setSpacing(6)
+        divider = QFrame()
+        divider.setFixedHeight(1)
+        divider.setStyleSheet("background: #1e2128; border: none;")
+        layout.addSpacing(4)
+        layout.addWidget(divider)
+        layout.addSpacing(4)
 
-        out_lbl = QLabel("Output:")
-        out_lbl.setStyleSheet("font-size: 11px; color: #4b5563;")
+        # Footer: output folder on the left, workers stepper on the right
+        bot = QHBoxLayout()
+        bot.setSpacing(8)
+
+        _KEY = "font-size: 12px; color: #6b7280;"
+        _SMALL_BTN = (
+            "QPushButton { font-size: 12px; padding: 3px 10px; min-width: 0; min-height: 0; }"
+        )
+
+        out_lbl = QLabel("Clips saved to")
+        out_lbl.setStyleSheet(_KEY)
         bot.addWidget(out_lbl)
 
         self._output_path_lbl = QLabel("./final_clips")
-        self._output_path_lbl.setStyleSheet("font-size: 11px; color: #6b7280;")
+        self._output_path_lbl.setStyleSheet("font-size: 12px; color: #c8ccd4;")
         bot.addWidget(self._output_path_lbl)
 
         self._output_free_lbl = QLabel("")
-        self._output_free_lbl.setStyleSheet("font-size: 11px; color: #4b5563;")
+        self._output_free_lbl.setStyleSheet(_KEY)
         bot.addWidget(self._output_free_lbl)
 
-        _ICON = (
-            "QPushButton { font-size: 10px; color: #4b5563; border: 1px solid #2a2d35; "
-            "border-radius: 2px; padding: 2px; min-width: 0; min-height: 0; background: transparent; }"
-            "QPushButton:hover { color: #9ca3af; border-color: #4b5563; }"
-        )
+        bot.addSpacing(4)
         self._change_output_btn = QPushButton("Change…")
-        self._change_output_btn.setFixedHeight(22)
-        self._change_output_btn.setStyleSheet(_ICON + "QPushButton { padding: 2px 6px; }")
+        self._change_output_btn.setStyleSheet(_SMALL_BTN)
         self._change_output_btn.setToolTip("Choose where finished clips are saved")
         self._change_output_btn.clicked.connect(self._choose_output_folder)
         bot.addWidget(self._change_output_btn)
 
-        self._open_output_btn = QPushButton("↗")
-        self._open_output_btn.setFixedSize(22, 22)
-        self._open_output_btn.setStyleSheet(_ICON)
-        self._open_output_btn.setToolTip("Open output folder")
+        self._open_output_btn = QPushButton("Open")
+        self._open_output_btn.setStyleSheet(_SMALL_BTN)
+        self._open_output_btn.setToolTip("Open the output folder")
         self._open_output_btn.clicked.connect(self._open_output_folder)
         bot.addWidget(self._open_output_btn)
 
         bot.addStretch()
 
-        w_lbl = QLabel("Workers:")
-        w_lbl.setStyleSheet("font-size: 11px; color: #4b5563;")
+        w_lbl = QLabel("Workers")
+        w_lbl.setStyleSheet(_KEY)
         bot.addWidget(w_lbl)
 
         _STEP = (
-            "QPushButton { background: transparent; border: 1px solid #2a2d35; "
-            "color: #6b7280; font-size: 12px; border-radius: 2px; "
-            "padding: 2px; min-width: 0; min-height: 0; }"
+            "QPushButton { background: #1a1d23; border: 1px solid #2a2d35; "
+            "color: #9ca3af; font-size: 14px; border-radius: 4px; padding: 0; "
+            # Size here: QSS min/max sizes override setFixedSize
+            "min-width: 26px; max-width: 26px; min-height: 26px; max-height: 26px; }"
             "QPushButton:hover { color: #e8963c; border-color: #e8963c; }"
         )
         self._workers_dec_btn = QPushButton("−")
-        self._workers_dec_btn.setFixedSize(22, 22)
         self._workers_dec_btn.setStyleSheet(_STEP)
         self._workers_dec_btn.clicked.connect(self._dec_workers)
         bot.addWidget(self._workers_dec_btn)
 
-        # Grows to fit "auto"; the minimum keeps the stepper from jumping for 1-2 digits
+        # Wide enough for "auto" so the stepper doesn't jump as the value changes
         self._workers_count_lbl = QLabel("2")
         self._workers_count_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._workers_count_lbl.setMinimumWidth(22)
+        self._workers_count_lbl.setMinimumWidth(40)
         self._workers_count_lbl.setStyleSheet(
-            "font-size: 13px; font-weight: bold; color: #c8ccd4; padding: 0 4px;"
+            "font-size: 13px; font-weight: bold; color: #e6edf3;"
         )
         bot.addWidget(self._workers_count_lbl)
 
         self._workers_inc_btn = QPushButton("+")
-        self._workers_inc_btn.setFixedSize(22, 22)
         self._workers_inc_btn.setStyleSheet(_STEP)
         self._workers_inc_btn.clicked.connect(self._inc_workers)
         bot.addWidget(self._workers_inc_btn)
@@ -1206,7 +1299,9 @@ class RunView(QWidget):
             shown = names[:3]
             rest = len(names) - len(shown)
             text = ", ".join(shown) + (f"  +{rest} more" if rest else "")
-            self._summary_names_lbl.setText(text)
+            label = "Player names" if len(names) > 1 else "Player name"
+            self._summary_names_lbl.setText(
+                f"{label}: {text}  (used when the killfeed can't tell)")
         else:
             self._summary_names_lbl.setText("Player name read from each video's killfeed")
 
@@ -1295,9 +1390,9 @@ class RunView(QWidget):
             self._output_free_lbl.setText("")
             return
         low = free < LOW_SPACE_BYTES
-        self._output_free_lbl.setText(f"·  {_fmt_size(free)} free")
+        self._output_free_lbl.setText(f"({_fmt_size(free)} free)")
         self._output_free_lbl.setStyleSheet(
-            f"font-size: 11px; color: {'#e8963c' if low else '#4b5563'};"
+            f"font-size: 12px; color: {'#e8963c' if low else '#6b7280'};"
             + (" font-weight: bold;" if low else ""))
         self._output_free_lbl.setToolTip(
             "Low disk space on this drive. Pick a folder on a drive with more room."
@@ -1385,16 +1480,15 @@ class RunView(QWidget):
             file_list = self._source.get_file_list()
             if file_list is not None and not file_list:
                 return "Select at least one clip to process."
-        if not self._source.get_names():
-            return "Enter at least one in-game name."
+        # Names are optional: the analyzer reads the player's name off each killfeed.
         return ""
 
     def _start_pipeline(self):
         err = self._validate()
         if err:
-            self._validation_label.setText(err)
+            self._show_validation(err)
             return
-        self._validation_label.setText("")
+        self._show_validation("")
 
         if not self._confirm_output_space():
             return
@@ -1428,6 +1522,9 @@ class RunView(QWidget):
         self._worker.job_finished.connect(self._pipeline_widget.on_job_finished)
         self._worker.pipeline_count.connect(self._pipeline_widget.on_count_updated)
         self._worker.log_message.connect(lambda m: self._log_viewer.add_message(m, "info"))
+        self._worker.log_message.connect(self._pipeline_widget.set_status)
+        self._worker.stage_started.connect(
+            lambda s: self._pipeline_widget.set_status(f"Stage: {s}"))
         self._worker.error_occurred.connect(lambda e: self._log_viewer.add_message(e, "error"))
         self._worker.finished.connect(self._on_pipeline_done)
 
@@ -1443,6 +1540,10 @@ class RunView(QWidget):
         self._set_running(True)
         self._log_viewer.clear_log()
         self._worker.start()
+
+    def _show_validation(self, text: str) -> None:
+        self._validation_label.setText(text)
+        self._validation_label.setVisible(bool(text))
 
     def _worker_note(self) -> str:
         if self._gaming_btn.isChecked():
@@ -1473,13 +1574,15 @@ class RunView(QWidget):
             self._worker.set_gaming_mode(on)
 
     def _on_pipeline_done(self, success: bool):
-        self._set_running(False)
+        self._set_running(False, success)
+        if not success:
+            self._show_validation("The run didn't finish. The log below says why.")
         self.pipeline_finished.emit(success, self._input_size_bytes)
 
-    def _set_running(self, running: bool):
+    def _set_running(self, running: bool, success: bool = True):
         self._summary_frame.setVisible(not running)
         self._run_btn.setVisible(not running)
-        self._validation_label.setVisible(not running)
+        self._validation_label.setVisible(not running and bool(self._validation_label.text()))
         self._pipeline_widget.setVisible(running)
         self._ctrl_frame.setVisible(running)
         self._pause_btn.setEnabled(running)
@@ -1492,9 +1595,11 @@ class RunView(QWidget):
         else:
             self._elapsed_timer.stop()
             if self._elapsed_secs > 0:
-                self._log_viewer.add_message(
-                    f"Completed in {self._fmt_duration(self._elapsed_secs)}", "info"
-                )
+                took = self._fmt_duration(self._elapsed_secs)
+                if success:
+                    self._log_viewer.add_message(f"Completed in {took}", "success")
+                else:
+                    self._log_viewer.add_message(f"Stopped after {took}", "error")
 
     def _on_progress(self, pct: int, msg: str) -> None:
         pass

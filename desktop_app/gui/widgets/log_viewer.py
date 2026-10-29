@@ -21,47 +21,57 @@ class LogViewer(QWidget):
     def init_ui(self):
         """Initialize the user interface."""
         layout = QVBoxLayout()
-        
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
         # Header with controls
         header_layout = QHBoxLayout()
-        
-        self.title_label = QLabel("Pipeline Log")
-        self.title_label.setFont(QFont("Arial", 12, QFont.Weight.Bold))
+        header_layout.setSpacing(8)
+
+        self.title_label = QLabel("LOG")
+        self.title_label.setStyleSheet(
+            "color: #4b5563; font-size: 10px; font-weight: bold; letter-spacing: 2px;")
         header_layout.addWidget(self.title_label)
-        
+
         header_layout.addStretch()
-        
+
         self.auto_scroll_cb = QCheckBox("Auto-scroll")
         self.auto_scroll_cb.setChecked(True)
+        self.auto_scroll_cb.setStyleSheet("font-size: 12px;")
         header_layout.addWidget(self.auto_scroll_cb)
-        
+
+        _small = "QPushButton { font-size: 12px; padding: 3px 12px; min-width: 0; }"
         self.clear_btn = QPushButton("Clear")
+        self.clear_btn.setStyleSheet(_small)
         self.clear_btn.clicked.connect(self.clear_log)
         header_layout.addWidget(self.clear_btn)
-        
-        self.export_btn = QPushButton("Export")
+
+        self.export_btn = QPushButton("Export…")
+        self.export_btn.setStyleSheet(_small)
         self.export_btn.clicked.connect(self.export_log)
         header_layout.addWidget(self.export_btn)
-        
+
         layout.addLayout(header_layout)
-        
+
         # Log display
         self.log_display = QTextEdit()
         self.log_display.setReadOnly(True)
         self.log_display.setFont(QFont("Consolas", 9))
         self.log_display.setStyleSheet("""
             QTextEdit {
-                background-color: #1e1e1e;
-                color: #ffffff;
-                border: 1px solid #444;
+                background-color: #0a0c10;
+                color: #c8ccd4;
+                border: 1px solid #1e2128;
+                border-radius: 4px;
+                padding: 4px 6px;
             }
         """)
-        
-        layout.addWidget(self.log_display)
-        
+
+        layout.addWidget(self.log_display, 1)
+
         # Status bar
         self.status_label = QLabel("Ready")
-        self.status_label.setStyleSheet("color: #666; font-size: 10px;")
+        self.status_label.setStyleSheet("color: #4b5563; font-size: 10px;")
         layout.addWidget(self.status_label)
         
         self.setLayout(layout)
@@ -105,13 +115,13 @@ class LogViewer(QWidget):
         format = QTextCharFormat()
         
         if level == "error":
-            format.setForeground(QColor("#ff6b6b"))  # Red
+            format.setForeground(QColor("#f87171"))  # Red
         elif level == "warning":
             format.setForeground(QColor("#ffd93d"))  # Yellow
         elif level == "success":
-            format.setForeground(QColor("#6bcf7f"))  # Green
+            format.setForeground(QColor("#4ade80"))  # Green
         elif level == "info":
-            format.setForeground(QColor("#74c0fc"))  # Blue
+            format.setForeground(QColor("#9ca3af"))  # Neutral grey
         else:
             format.setForeground(QColor("#ffffff"))  # White
         

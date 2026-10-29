@@ -1,14 +1,21 @@
+# Install with setup.bat (Windows) or ./setup.sh (macOS/Linux). They install
+# the right PyTorch build for your GPU *before* this file, so the torch lines
+# below are already satisfied. Installing this file directly gets you a
+# CPU-only PyTorch on Windows.
+
 # Core Libraries
 pyyaml
 pandas
 tqdm
+numpy
+numba
 
 # Computer Vision
 opencv-python
 easyocr
 
 # Audio Analysis & Text
-openai-whisper @ git+https://github.com/openai/whisper.git
+openai-whisper
 librosa
 thefuzz
 
@@ -19,9 +26,7 @@ PyQt6
 Pillow
 psutil
 
-# GPU Support (install with CUDA if available)
-# For CUDA 12.1: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-# For CPU only: pip install torch torchvision torchaudio
+# PyTorch
 torch
 torchvision
 torchaudio

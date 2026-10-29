@@ -1,113 +1,36 @@
-#!/bin/bash
-echo "======================================================"
-echo " CHAOS Project Setup Script for macOS / Linux"
-echo "======================================================"
-echo
+#!/usr/bin/env bash
+# CHAOS setup for macOS / Linux. Re-run any time to repair or update.
+# Finds Python 3.10+, then hands off to scripts/install.py (arguments are passed through).
 
-cd "$(dirname "$0")"
-echo "[0/5] Setting working directory to: $(pwd)"
-echo
+cd "$(dirname "$0")" || exit 1
 
-echo "[1/5] Checking for Python 3..."
-if ! command -v python3 &> /dev/null; then
-    echo "ERROR: Python 3 not found. Please install it."
+find_python() {
+    # 3.12 first: it's what CHAOS is developed against and every dependency has wheels for it.
+    for cmd in python3.12 python3.11 python3.13 python3.10 python3; do
+        if command -v "$cmd" >/dev/null 2>&1 &&
+           [ "$("$cmd" -c 'import sys; print(sys.version_info >= (3, 10))' 2>/dev/null)" = "True" ]; then
+            echo "$cmd"
+            return
+        fi
+    done
+}
+
+PYTHON="$(find_python)"
+if [ -z "$PYTHON" ]; then
+    echo "ERROR: Python 3.10+ not found."
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        echo "Install it with Homebrew (brew install python@3.12) or from https://www.python.org/downloads/"
+    else
+        echo "Install it with your package manager, e.g.: sudo apt install python3 python3-venv"
+    fi
     exit 1
 fi
-echo "      Python 3 found."
-echo
 
-echo "[2/5] Checking for FFmpeg..."
-if ! command -v ffmpeg &> /dev/null; then
-    echo "      FFmpeg not found. Attempting to install automatically..."
-    
-    # Try different package managers based on OS
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        # macOS
-        echo "      Trying Homebrew (macOS)..."
-        if ! command -v brew &> /dev/null; then
-            echo "      Homebrew not found. Installing Homebrew first..."
-            /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || {
-                echo "ERROR: Failed to install Homebrew. Please install manually:"
-                echo "      /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
-                exit 1
-            }
-        fi
-        brew install ffmpeg || {
-            echo "ERROR: Failed to install FFmpeg via Homebrew."
-            exit 1
-        }
-        echo "      FFmpeg installed via Homebrew."
-    else
-        # Linux
-        echo "      Trying system package manager (Linux)..."
-        if command -v apt-get &> /dev/null; then
-            # Ubuntu/Debian
-            sudo apt-get update && sudo apt-get install -y ffmpeg || {
-                echo "ERROR: Failed to install FFmpeg via apt-get."
-                exit 1
-            }
-            echo "      FFmpeg installed via apt-get."
-        elif command -v yum &> /dev/null; then
-            # CentOS/RHEL
-            sudo yum install -y ffmpeg || {
-                echo "ERROR: Failed to install FFmpeg via yum."
-                exit 1
-            }
-            echo "      FFmpeg installed via yum."
-        elif command -v dnf &> /dev/null; then
-            # Fedora
-            sudo dnf install -y ffmpeg || {
-                echo "ERROR: Failed to install FFmpeg via dnf."
-                exit 1
-            }
-            echo "      FFmpeg installed via dnf."
-        elif command -v pacman &> /dev/null; then
-            # Arch Linux
-            sudo pacman -S --noconfirm ffmpeg || {
-                echo "ERROR: Failed to install FFmpeg via pacman."
-                exit 1
-            }
-            echo "      FFmpeg installed via pacman."
-        else
-            echo "ERROR: No supported package manager found."
-            echo "      Please install FFmpeg manually for your Linux distribution."
-            exit 1
-        fi
-    fi
-else
-    echo "      FFmpeg found."
+# Debian/Ubuntu ship venv separately from python3.
+if ! "$PYTHON" -c 'import ensurepip, venv' >/dev/null 2>&1; then
+    echo "ERROR: $PYTHON is missing the venv module."
+    echo "On Debian/Ubuntu: sudo apt install python3-venv"
+    exit 1
 fi
-echo
 
-echo "[3/6] Creating virtual environment 'venv'..."
-if [ -d "venv" ]; then
-    echo "      Virtual environment exists. Skipping."
-else
-    python3 -m venv venv || exit 1
-    echo "      Virtual environment created."
-fi
-echo
-
-echo "[4/6] Activating environment and installing base packages..."
-source venv/bin/activate
-pip install -r requirements.txt || exit 1
-echo "      Base packages installed."
-echo
-
-echo "[5/6] Installing PyTorch for Apple Silicon (MPS) / CPU..."
-echo "      This is the slowest step. Please be patient."
-echo "      Installing PyTorch with MPS support for Apple Silicon..."
-pip install torch torchvision torchaudio || exit 1
-echo "      PyTorch installed with MPS support!"
-echo "      You can now use --gpu flag for faster processing on Apple Silicon."
-echo
-
-echo "[6/6] Setup Complete!"
-echo "======================================================"
-echo
-echo "To use CHAOS, open a terminal in this folder and run:"
-echo "  source venv/bin/activate"
-echo "Then run the main script:"
-echo "  python3 main.py analyze --debug"
-echo "  python3 main.py analyze --debug --gpu  (for GPU acceleration)"
-echo
+exec "$PYTHON" scripts/install.py "$@"

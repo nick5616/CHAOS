@@ -69,6 +69,8 @@ class ChaosMainWindow(QMainWindow):
     def _init_ui(self):
         self.setWindowTitle("CHAOS")
         self.setGeometry(100, 100, 1200, 800)
+        # Below this the clip grid, zoom panel and summary card start to crowd
+        self.setMinimumSize(900, 600)
 
         icon_path = Path(__file__).parent.parent / "resources" / "icons" / "chaos_icon.png"
         if icon_path.exists():
