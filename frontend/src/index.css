@@ -1,0 +1,113 @@
+@import "tailwindcss";
+@import "@fontsource/barlow/latin-400.css";
+@import "@fontsource/barlow/latin-500.css";
+@import "@fontsource/barlow/latin-600.css";
+@import "@fontsource/barlow-condensed/latin-500.css";
+@import "@fontsource/barlow-condensed/latin-600.css";
+@import "@fontsource/barlow-condensed/latin-700.css";
+@import "@fontsource-variable/jetbrains-mono";
+
+/* Design tokens, in the spirit of CS2's menus: cool slate panels over a
+   dimmed game scene, condensed uppercase headings, sharp corners. Use these
+   (bg-panel, text-fg-muted, border-line, text-accent...) rather than raw
+   colours, so the palette can change in one place. */
+@theme {
+  --font-sans: "Barlow", system-ui, sans-serif;
+  --font-display: "Barlow Condensed", "Barlow", sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
+
+  --color-bg: #0b0f14;
+  --color-panel: #121820;
+  --color-raised: #19212b;
+  --color-hover: #212b37;
+  --color-line: #ffffff14;
+  --color-line-strong: #ffffff26;
+
+  --color-fg: #e8edf2;
+  --color-fg-muted: #97a3b0;
+  --color-fg-faint: #5c6876;
+
+  /* Orange and blue are the logo's own colours (src/assets/logo.png). */
+  --color-accent: #ff7f27;
+  --color-accent-hi: #ff9852;
+  --color-accent-ink: #1c0e04;
+
+  /* Secondary: done, success and "all good" states, and the second ambient glow.
+     The logo blue is too dark for small text here, so text uses secondary-hi,
+     a lighter tint of the same hue. */
+  --color-secondary: #3f48cc;
+  --color-secondary-hi: #848ae1;
+  --color-secondary-ink: #f4f5ff;
+
+  --color-warn: #fbbf24;
+  --color-bad: #f87171;
+  --color-crowd: #c084fc; /* crowd-reaction markers */
+
+  /* CS2 keeps corners nearly square. */
+  --radius-xs: 1px;
+  --radius-sm: 2px;
+  --radius-md: 3px;
+  --radius-lg: 4px;
+  --radius-xl: 5px;
+  --radius-2xl: 6px;
+
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-bg text-fg font-sans antialiased;
+    font-size: 15px;
+    user-select: none;
+    overflow: hidden;
+  }
+  ::selection {
+    @apply bg-accent/30;
+  }
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-accent;
+  }
+  input::placeholder {
+    @apply text-fg-faint;
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply border-[3px] border-solid border-transparent bg-line-strong bg-clip-padding;
+  }
+}
+
+/* Condensed uppercase label, the CS2 menu voice. */
+@utility display {
+  font-family: var(--font-display);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+@utility tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Diagonal stripes that crawl, for whatever is working right now. */
+@utility stripes {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgb(255 255 255 / 0.16) 0 6px,
+    transparent 6px 12px
+  );
+  background-size: 17px 17px;
+  animation: stripes 0.8s linear infinite;
+}
+
+@keyframes stripes {
+  to {
+    background-position: 17px 0;
+  }
+}

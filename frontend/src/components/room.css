@@ -1,0 +1,229 @@
+/* The title room: CRTs in a dark room, built from gradients. Sizes are in
+   stage pixels (the stage is 1600x900, scaled to cover the window). */
+
+.room-stage {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 1600px;
+  height: 900px;
+  margin: -450px 0 0 -800px;
+  perspective: 1000px;
+  perspective-origin: 50% 50%;
+}
+
+.room-3d {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+}
+
+.room-layer {
+  position: absolute;
+  will-change: transform, filter;
+}
+
+.room-paused,
+.room-paused * {
+  animation-play-state: paused !important;
+}
+
+/* ---------------------------------------------------------------- the room */
+
+.room-wall {
+  background:
+    radial-gradient(ellipse 5% 13% at 50% 50%, rgb(200 20 18 / 0.5), transparent 70%),
+    radial-gradient(ellipse 12% 26% at 50% 52%, rgb(110 8 8 / 0.28), transparent 75%),
+    radial-gradient(ellipse 35% 45% at 78% 8%, rgb(110 190 180 / 0.13), transparent 70%),
+    radial-gradient(ellipse 30% 40% at 20% 15%, rgb(90 160 150 / 0.08), transparent 70%),
+    repeating-linear-gradient(90deg, transparent 0 260px, rgb(255 255 255 / 0.018) 260px 300px, transparent 300px 420px),
+    linear-gradient(#0c0f0f, #070808 70%, #050505);
+}
+
+/* the red-lit doorway at the back */
+.room-door {
+  background:
+    linear-gradient(90deg, rgb(0 0 0 / 0.75), transparent 18%, transparent 82%, rgb(0 0 0 / 0.75)),
+    linear-gradient(#3a0505, #8a0d0b 45%, #2a0303);
+  box-shadow: 0 0 90px 16px rgb(160 15 12 / 0.3), inset 0 0 60px rgb(0 0 0 / 0.8);
+}
+
+.room-floor {
+  background:
+    repeating-conic-gradient(#1b2221 0 25%, #121716 0 50%) 0 0 / 120px 120px;
+  mask-image: radial-gradient(ellipse 45% 60% at 50% 0%, black 10%, transparent 75%);
+}
+
+.room-cone {
+  clip-path: polygon(44% 0, 56% 0, 100% 100%, 0 100%);
+  background: linear-gradient(rgb(185 245 235 / 0.42), rgb(140 220 210 / 0.12) 55%, transparent 90%);
+  mix-blend-mode: screen;
+  filter: blur(10px);
+}
+
+.room-bulb {
+  background: radial-gradient(circle, #fff 0 18%, rgb(210 255 245 / 0.8) 30%, rgb(160 230 220 / 0.25) 55%, transparent 72%);
+  mix-blend-mode: screen;
+}
+
+.room-dust {
+  position: absolute;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: rgb(220 255 245 / 0.7);
+  animation: dust linear infinite;
+}
+
+@keyframes dust {
+  0% { transform: translate(0, 0); opacity: 0; }
+  15% { opacity: 0.8; }
+  85% { opacity: 0.6; }
+  100% { transform: translate(var(--dx), -220px); opacity: 0; }
+}
+
+/* ---------------------------------------------------------------- CRTs */
+
+.crt-cabinet {
+  border-radius: 22px;
+  background:
+    linear-gradient(160deg, rgb(255 255 255 / 0.07), transparent 35%),
+    linear-gradient(#34312c, #1e1c1a 55%, #141312);
+  box-shadow:
+    inset 0 2px 0 rgb(255 255 255 / 0.08),
+    inset 0 -14px 34px rgb(0 0 0 / 0.65),
+    0 40px 80px rgb(0 0 0 / 0.7);
+}
+
+.crt-screen {
+  position: relative;
+  overflow: hidden;
+  border-radius: 14% / 18%;
+  background: #090b0a;
+  box-shadow:
+    inset 0 0 70px rgb(0 0 0 / 0.95),
+    inset 0 0 10px #000,
+    0 0 0 10px #0b0a09,
+    0 0 0 13px rgb(255 255 255 / 0.05),
+    0 0 60px rgb(190 230 255 / 0.1);
+}
+
+.crt-screen::before {
+  /* scanlines */
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  background: repeating-linear-gradient(0deg, rgb(0 0 0 / 0.28) 0 1px, transparent 1px 3px);
+}
+
+.crt-screen::after {
+  /* curved glass: glare and dark edges */
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 60% 45% at 30% 18%, rgb(255 255 255 / 0.13), transparent 60%),
+    radial-gradient(ellipse 85% 85% at 50% 50%, transparent 60%, rgb(0 0 0 / 0.7) 100%);
+}
+
+.crt-flicker {
+  animation: flicker 4s steps(1) infinite;
+}
+
+@keyframes flicker {
+  0%, 100% { opacity: 1; }
+  47% { opacity: 0.94; }
+  48% { opacity: 1; }
+  73% { opacity: 0.97; }
+  74% { opacity: 1; }
+}
+
+.crt-glow {
+  color: #e7eee8;
+  text-shadow: 0 0 6px rgb(220 245 235 / 0.55), 0 0 22px rgb(180 230 220 / 0.25);
+}
+
+.crt-phosphor {
+  color: #7dff9b;
+  text-shadow: 0 0 6px rgb(90 255 140 / 0.7);
+}
+
+.crt-menu-item {
+  display: block;
+  width: 100%;
+  text-align: center;
+  font-family: var(--font-display);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  line-height: 1.12;
+  transition: background-color 0.12s, color 0.12s;
+}
+
+.crt-menu-item[data-active="true"] {
+  background: #d9ddd5;
+  color: #121412;
+  text-shadow: none;
+  box-shadow: 0 0 30px rgb(220 240 230 / 0.35);
+}
+
+.crt-knob {
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #4a4844, #131211 60%, #050505);
+  box-shadow: 0 3px 6px rgb(0 0 0 / 0.7), inset 0 1px 0 rgb(255 255 255 / 0.12);
+}
+
+.crt-static {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='1.4' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 1.4 -0.2'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  animation: static 0.25s steps(4) infinite;
+}
+
+@keyframes static {
+  0% { background-position: 0 0; }
+  25% { background-position: -60px 30px; }
+  50% { background-position: 40px -50px; }
+  75% { background-position: -30px -20px; }
+  100% { background-position: 0 0; }
+}
+
+.console-light {
+  animation: blink var(--d, 1.6s) steps(1) infinite;
+  animation-delay: var(--delay, 0s);
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+/* ---------------------------------------------------------------- the chair */
+
+.chair-arm {
+  border-radius: 40px 40px 0 0;
+  background:
+    linear-gradient(160deg, rgb(255 255 255 / 0.06), transparent 40%),
+    linear-gradient(#2a2420, #120f0d);
+  box-shadow: inset 0 3px 0 rgb(255 255 255 / 0.05);
+}
+
+.chair-strap {
+  background: linear-gradient(#3b332b, #1c1814);
+  box-shadow: 0 0 0 2px rgb(0 0 0 / 0.5);
+}
+
+/* ---------------------------------------------------------------- lens */
+
+.room-grain {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23g)' opacity='0.5'/></svg>");
+  mix-blend-mode: overlay;
+  opacity: 0.35;
+  animation: static 0.6s steps(3) infinite;
+}
+
+.room-vignette {
+  background: radial-gradient(ellipse 75% 70% at 50% 45%, transparent 45%, rgb(0 0 0 / 0.85) 100%);
+}

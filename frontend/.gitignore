@@ -1,0 +1,3 @@
+node_modules/
+*.tsbuildinfo
+# dist/ is committed on purpose: users run the built UI without installing Node.
