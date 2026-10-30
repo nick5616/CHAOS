@@ -79,9 +79,10 @@ def missing(config: dict) -> list:
     return [m for m in required(config) if not m.ready()]
 
 
-def fetch(model: Model, progress=None) -> str:
+def fetch(model: Model, progress=None, verifying=None) -> str:
     """Download `model` if it isn't there yet and return its path.
-    `progress(done_bytes, total_bytes)` is called while downloading. Downloads
+    `progress(done_bytes, total_bytes)` is called while downloading, and
+    `verifying()` once the download is complete and being checked. Downloads
     to a temp file and checks the checksum before moving it into place, so an
     interrupted or tampered download is never used."""
     if model.ready():
@@ -98,6 +99,8 @@ def fetch(model: Model, progress=None) -> str:
                 done += len(chunk)
                 if progress:
                     progress(done, total)
+        if verifying:
+            verifying()
         if model.zip_member:
             with zipfile.ZipFile(part) as zf, zf.open(model.zip_member) as src:
                 data = src.read()

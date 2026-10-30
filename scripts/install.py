@@ -25,7 +25,7 @@ IS_WINDOWS = os.name == "nt"
 VENV_PY = VENV / ("Scripts/python.exe" if IS_WINDOWS else "bin/python")
 MIN_PYTHON = (3, 10)
 # numba first: see the WinError 1114 note in desktop_app/main_gui.py.
-VERIFY_IMPORTS = "import numba, torch, cv2, whisper, easyocr, librosa, yaml, pandas, thefuzz, PyQt6.QtWidgets"
+VERIFY_IMPORTS = "import numba, torch, cv2, whisper, easyocr, librosa, yaml, pandas, thefuzz, PyQt6.QtWidgets, webview"
 FFMPEG_ZIP_URL ="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
 
 # Both are stdlib-only, so they import fine before any dependencies are installed.

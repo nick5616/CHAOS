@@ -21,6 +21,8 @@ thefuzz
 
 # GUI Framework
 PyQt6
+# Web UI window (run_desktop_app.py --web)
+pywebview
 
 # Enhanced functionality
 Pillow

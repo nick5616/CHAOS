@@ -38,8 +38,12 @@ if os.name == "nt":
 
         subprocess.Popen.__init__ = _popen_init_no_window
 
-# Import and run the desktop app
-from desktop_app.main_gui import main
+# Import and run the desktop app. --web opens the new React UI instead
+# (see REACT_FRONTEND_PLAN.md); the Qt app stays the default until it's done.
+if "--web" in sys.argv:
+    from desktop_app.web.main import main
+else:
+    from desktop_app.main_gui import main
 
 if __name__ == "__main__":
     main()
